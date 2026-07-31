@@ -1,6 +1,6 @@
 [project]
 name = "ai-rete-rag-mcp"
-version = "0.5.1"
+version = "0.5.2"
 description = "MCP server for ai·rete·rag — deterministic rule-based decisions with RAG-powered explanations"
 readme = "README.md"
 requires-python = ">=3.10"
