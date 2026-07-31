@@ -1,0 +1,38 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.ai-rete-rag/ai-rete-rag-mcp",
+  "title": "ai·rete·rag",
+  "description": "Author rules from policy docs, then decide: a Rete engine gives the verdict, an LLM explains why.",
+  "version": "0.5.1",
+  "repository": {
+    "url": "https://github.com/zaharajabeen13-create/ai-rete-rag-mcp",
+    "source": "github"
+  },
+  "websiteUrl": "https://ai-rete-rag.com",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "ai-rete-rag-mcp",
+      "version": "0.5.1",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "AI_RETE_RAG_API_KEY",
+          "description": "Your ai·rete·rag API key (create one at ai-rete-rag.com under Settings -> API Keys). Authenticates calls and ties them to your plan quota.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "AI_RETE_RAG_API_URL",
+          "description": "API base URL. Defaults to https://ai-rete-rag.com; override for local development.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
