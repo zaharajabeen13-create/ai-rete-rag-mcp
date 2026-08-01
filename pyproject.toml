@@ -1,6 +1,6 @@
 [project]
 name = "ai-rete-rag-mcp"
-version = "0.5.2"
+version = "0.5.3"
 description = "MCP server for ai·rete·rag — deterministic rule-based decisions with RAG-powered explanations"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -8,7 +8,7 @@ license = { text = "MIT" }
 authors = [{ name = "ai·rete·rag", email = "contact@ai-rete-rag.com" }]
 keywords = ["mcp", "model-context-protocol", "rules-engine", "rete", "rag", "decision-intelligence"]
 dependencies = [
-    "mcp>=1.2.0",
+    "mcp>=1.2.0,<2",
     "httpx>=0.27",
 ]
 
