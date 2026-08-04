@@ -12,12 +12,18 @@ dependencies = [
     "httpx>=0.27",
 ]
 
+[project.optional-dependencies]
+# Only the hosted endpoint needs a web server. A user running the stdio server
+# through uvx should not pay for uvicorn on install.
+remote = ["uvicorn>=0.30"]
+
 [project.urls]
 Homepage = "https://ai-rete-rag.com"
 Documentation = "https://ai-rete-rag.com/docs-site"
 
 [project.scripts]
 ai-rete-rag-mcp = "ai_rete_rag_mcp.server:main"
+ai-rete-rag-mcp-remote = "ai_rete_rag_mcp.remote:main"
 
 [build-system]
 requires = ["hatchling"]

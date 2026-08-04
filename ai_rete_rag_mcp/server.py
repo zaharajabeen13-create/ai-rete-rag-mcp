@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextvars import ContextVar
 from typing import Any, Literal
 
 import httpx
@@ -25,6 +26,19 @@ API_URL = os.environ.get("AI_RETE_RAG_API_URL", "https://ai-rete-rag.com").rstri
 API_KEY = os.environ.get("AI_RETE_RAG_API_KEY", "")
 USER_ID = os.environ.get("AI_RETE_RAG_USER_ID", "")
 USER_EMAIL = os.environ.get("AI_RETE_RAG_USER_EMAIL", "")
+
+# Over stdio the key is this process's own, from the environment: one user, one
+# key, set once at startup. Served over HTTP the process is shared, so the key
+# belongs to the request rather than the process and `remote.py` sets this per
+# call. A ContextVar keeps those two concurrent requests from seeing each
+# other's credential — a module global would leak one caller's key to the next.
+_request_api_key: ContextVar[str | None] = ContextVar("_request_api_key", default=None)
+
+
+def current_api_key() -> str:
+    """The key this call should authenticate with: the request's, else the
+    process's. Empty means anonymous — demo domains only."""
+    return _request_api_key.get() or API_KEY
 
 mcp = FastMCP(
     "ai-rete-rag",
@@ -42,10 +56,13 @@ mcp = FastMCP(
 
 def _headers() -> dict[str, str]:
     headers: dict[str, str] = {}
-    if API_KEY:
-        headers["Authorization"] = f"Bearer {API_KEY}"
+    key = current_api_key()
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
         return headers
-    # Legacy fallback: bare identity headers (no key verification server-side)
+    # Legacy fallback: bare identity headers (no key verification server-side).
+    # Deliberately env-only — these are unverified claims of identity, so they
+    # must never be settable by a remote caller.
     if USER_ID:
         headers["X-User-Id"] = USER_ID
     if USER_EMAIL:
@@ -75,7 +92,8 @@ async def _request(method: str, path: str, **kwargs: Any) -> str:
         return r.text
 
 
-@mcp.tool()
+# Not read-only: each call persists an audit record and consumes plan quota.
+@mcp.tool(title="Make a decision", annotations={"readOnlyHint": False, "destructiveHint": False})
 async def decide(
     domain: str,
     query: str,
@@ -127,7 +145,7 @@ async def decide(
     return await _request("POST", "/decide", json=body)
 
 
-@mcp.tool()
+@mcp.tool(title="List rules", annotations={"readOnlyHint": True})
 async def list_rules(domain: str | None = None) -> str:
     """List the decision rules for one domain (or all domains).
 
@@ -145,7 +163,7 @@ async def list_rules(domain: str | None = None) -> str:
     return await _request("GET", "/rules", params=params)
 
 
-@mcp.tool()
+@mcp.tool(title="Ingest policy text", annotations={"readOnlyHint": False, "destructiveHint": False})
 async def ingest_text(domain: str, text: str, source: str | None = None) -> str:
     """Add policy/reference text to a domain's knowledge base.
 
@@ -167,13 +185,13 @@ async def ingest_text(domain: str, text: str, source: str | None = None) -> str:
     )
 
 
-@mcp.tool()
+@mcp.tool(title="List documents", annotations={"readOnlyHint": True})
 async def list_documents(domain: str) -> str:
     """List the documents ingested into a domain's knowledge base."""
     return await _request("GET", f"/domains/{domain}/documents")
 
 
-@mcp.tool()
+@mcp.tool(title="Get rule source (YAML)", annotations={"readOnlyHint": True})
 async def get_rule_source(domain: str) -> str:
     """Fetch a domain's rule set as editable YAML (plus the parsed rules and
     whether you may edit it). Use this before `put_rules` to see the current
@@ -182,7 +200,7 @@ async def get_rule_source(domain: str) -> str:
     return await _request("GET", f"/domains/{domain}/rules")
 
 
-@mcp.tool()
+@mcp.tool(title="Save rules", annotations={"readOnlyHint": False, "destructiveHint": True})
 async def put_rules(domain: str, rules_yaml: str, dry_run: bool = False) -> str:
     """Create or replace a domain's rule set from YAML (self-serve rule authoring).
 
@@ -260,7 +278,7 @@ async def put_rules(domain: str, rules_yaml: str, dry_run: bool = False) -> str:
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Draft rules from a policy", annotations={"readOnlyHint": True})
 async def import_policy_rules(domain: str, policy_text: str) -> str:
     """Convert a written policy document into DRAFT decision rules (LLM-assisted).
 
@@ -283,11 +301,13 @@ async def import_policy_rules(domain: str, policy_text: str) -> str:
     )
 
 
-@mcp.tool()
+@mcp.tool(title="Check usage and quota", annotations={"readOnlyHint": True})
 async def get_usage() -> str:
     """Show this account's decision usage, plan, and remaining monthly quota."""
-    if not API_KEY and not USER_ID:
-        return "Error: set the AI_RETE_RAG_API_KEY environment variable to check usage."
+    if not current_api_key() and not USER_ID:
+        return ("Error: no API key. Set AI_RETE_RAG_API_KEY when running locally, "
+                "or send it as an Authorization: Bearer header when connecting "
+                "to a remote endpoint.")
     return await _request("GET", "/usage")
 
 
