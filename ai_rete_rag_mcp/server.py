@@ -100,7 +100,8 @@ async def decide(
         unstructured_text: Optional free text (an application, a case note);
             facts are extracted from it automatically and merged.
         response_mode: "verdict_only" (fastest), "verdict_with_explanation",
-            or "full_audit" (every rule evaluation + retrieved chunks; Pro plan).
+            or "full_audit" (every rule evaluation + retrieved chunks, available
+            on every plan including the free tier).
             rule_firings come back in causal order: a rule that matched a fact
             asserted by an earlier firing appears after it, with the derived
             facts listed under `asserted_facts`.
