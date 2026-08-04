@@ -3,7 +3,7 @@
   "name": "com.ai-rete-rag/ai-rete-rag-mcp",
   "title": "ai·rete·rag",
   "description": "Author rules from policy docs, then decide: a Rete engine gives the verdict, an LLM explains why.",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "repository": {
     "url": "https://github.com/zaharajabeen13-create/ai-rete-rag-mcp",
     "source": "github"
@@ -14,7 +14,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "ai-rete-rag-mcp",
-      "version": "0.5.3",
+      "version": "0.5.4",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
