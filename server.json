@@ -38,7 +38,7 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://api.ai-rete-rag.com/mcp",
+      "url": "https://ai-rete-rag.com/mcp",
       "headers": [
         {
           "name": "Authorization",
