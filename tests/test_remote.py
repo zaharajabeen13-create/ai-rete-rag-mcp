@@ -79,9 +79,17 @@ async def _call_tool(client: httpx.AsyncClient, name: str,
 class TestEndpointBasics:
     @pytest.mark.anyio
     async def test_health_reports_transport(self, client):
-        r = await client.get("/health")
+        r = await client.get("/mcp/health")
         assert r.status_code == 200
         assert r.json()["transport"] == "streamable-http"
+
+    @pytest.mark.anyio
+    async def test_health_lives_under_the_routed_prefix(self, client):
+        # nginx and the Cloudflare Worker route `/mcp*`. A health check outside
+        # that prefix is unreachable from the internet however well it works
+        # locally — which is exactly how it shipped the first time.
+        assert (await client.get("/mcp/health")).status_code == 200
+        assert (await client.get("/health")).status_code == 404
 
     @pytest.mark.anyio
     async def test_server_card_is_served_for_smithery(self, client):

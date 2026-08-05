@@ -142,12 +142,22 @@ async def server_card(_request: Request) -> Response:
 
 
 def build_app() -> Starlette:
-    """The ASGI app: the MCP endpoint, a health check, and the server card."""
+    """The ASGI app: the MCP endpoint, a health check, and the server card.
+
+    Paths here are absolute, because nginx forwards the original URI unchanged.
+    The MCP endpoint is at /mcp (FastMCP's own `streamable_http_path`), so the
+    health check sits under that same prefix — anything outside it is not
+    covered by the `/mcp*` route and would be unreachable from the internet.
+    The server card is the exception: its path is fixed by convention, so it
+    gets a route of its own at both the nginx and Cloudflare layers.
+    """
     mcp_app = mcp.streamable_http_app()
 
     return Starlette(
         routes=[
-            Route("/health", health, methods=["GET"]),
+            # Before the mount: Starlette matches in order, and the mount would
+            # otherwise swallow this and hand it to the MCP app, which 404s it.
+            Route("/mcp/health", health, methods=["GET"]),
             Route("/.well-known/mcp/server-card.json", server_card, methods=["GET"]),
             # Mounted last: it owns everything beneath its own path.
             Mount("/", app=mcp_app),
