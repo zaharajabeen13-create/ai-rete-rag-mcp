@@ -1,6 +1,6 @@
 [project]
 name = "ai-rete-rag-mcp"
-version = "0.6.0"
+version = "0.6.1"
 description = "MCP server for ai·rete·rag — deterministic rule-based decisions with RAG-powered explanations"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,7 +15,10 @@ dependencies = [
 [project.optional-dependencies]
 # Only the hosted endpoint needs a web server. A user running the stdio server
 # through uvx should not pay for uvicorn on install.
-remote = ["uvicorn>=0.30"]
+# starlette arrives with mcp today, but remote.py imports it directly — the app,
+# the routing and now CORSMiddleware — so it is declared rather than left to a
+# transitive edge that mcp is free to change.
+remote = ["uvicorn>=0.30", "starlette>=0.37"]
 
 [project.urls]
 Homepage = "https://ai-rete-rag.com"

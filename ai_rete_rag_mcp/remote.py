@@ -36,6 +36,7 @@ import os
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
@@ -65,13 +66,43 @@ _ALLOWED_HOSTS = [
         "localhost,localhost:*,127.0.0.1,127.0.0.1:*",
     ).split(",") if h.strip()
 ]
+# Browser-based clients send an Origin and it is validated the same way. Note
+# `["*"]` does NOT mean "any origin" here, however much it looks like it: the
+# SDK's `_validate_origin` does an exact match and then checks only `:*` port
+# patterns, so a bare `*` matches an Origin header whose literal value is `*`
+# and nothing else. Setting it that way reads as permissive and behaves as an
+# empty allowlist — every browser origin got a 403, while server-side callers
+# (Anthropic's connector, Smithery's scanner, Claude Code, curl) sailed through
+# because they send no Origin at all. Hence an explicit list.
+_ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get(
+        "MCP_ALLOWED_ORIGINS",
+        # The browser surfaces that connect to us: Claude, and the two
+        # directories that offer an in-page try-it (Glama's *Try in Browser*
+        # is how their profile score picks up a usage signal).
+        "https://claude.ai,https://glama.ai,https://smithery.ai,"
+        "https://ai-rete-rag.com,"
+        "http://localhost:*,http://127.0.0.1:*",
+    ).split(",") if o.strip()
+]
+
 mcp.settings.transport_security = TransportSecuritySettings(
     allowed_hosts=_ALLOWED_HOSTS,
-    # Any origin may call: this is an API for MCP clients, authenticated by
-    # bearer token rather than by where the request came from. Host validation
-    # is what stops rebinding, and it stays on.
-    allowed_origins=["*"],
+    allowed_origins=_ALLOWED_ORIGINS,
 )
+
+# The allowlist above only decides whether a request is *rejected*. A browser
+# needs two more things before it will let a page use the response at all: a
+# preflight answered on OPTIONS, which the MCP app does not route (it serves
+# GET, POST and DELETE, so a preflight got a 405), and Access-Control-* headers
+# on the reply. Without both, every browser client fails while server-side
+# callers — Anthropic's connector, Smithery's scanner, Claude Code, curl — see
+# nothing wrong, because they send no Origin.
+#
+# `:*` is the SDK's own port-wildcard syntax and means nothing to
+# CORSMiddleware, so the local entries move to a regex and the rest stay exact.
+_CORS_ORIGINS = [o for o in _ALLOWED_ORIGINS if not o.endswith(":*")]
+_CORS_ORIGIN_REGEX = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
 
 # The URL this endpoint is reachable at from outside, which is what goes into
 # directory listings — so it must be a host whose certificate the public trusts.
@@ -162,7 +193,27 @@ def build_app() -> Starlette:
             # Mounted last: it owns everything beneath its own path.
             Mount("/", app=mcp_app),
         ],
-        middleware=[Middleware(CallerContextMiddleware)],
+        middleware=[
+            # Outermost, deliberately: a preflight must be answered here rather
+            # than travel further in, and the Access-Control-* headers have to
+            # be on the way out no matter which layer produced the response.
+            Middleware(
+                CORSMiddleware,
+                allow_origins=_CORS_ORIGINS,
+                allow_origin_regex=_CORS_ORIGIN_REGEX,
+                allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+                # Covers Authorization and Content-Type. Safe as a wildcard only
+                # because credentials are off: the caller's key travels in a
+                # header it sets explicitly, never in a cookie the browser
+                # attaches on its own, so no ambient authority rides along.
+                allow_headers=["*"],
+                allow_credentials=False,
+                # The session id is a response header, and a browser client
+                # cannot read one that isn't exposed.
+                expose_headers=["mcp-session-id", "mcp-protocol-version"],
+            ),
+            Middleware(CallerContextMiddleware),
+        ],
         # The MCP app runs a session manager that has to be started and stopped
         # with the process; without inheriting its lifespan the first call fails.
         lifespan=lambda _app: mcp_app.router.lifespan_context(_app),

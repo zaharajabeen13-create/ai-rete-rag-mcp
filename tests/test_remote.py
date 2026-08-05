@@ -120,6 +120,66 @@ class TestEndpointBasics:
         }
 
 
+class TestTransportSecurityMatchesProduction:
+    """The DNS-rebinding settings, checked against the names traffic arrives on.
+
+    Both of these shipped broken because the module was tested at a layer where
+    the header under test is whatever the test client happened to send. Assert
+    the real values instead.
+    """
+
+    @pytest.mark.anyio
+    async def test_the_host_the_worker_forwards_is_allowed(self, client):
+        # The Cloudflare Worker rewrites the hostname to api.ai-rete-rag.com
+        # before forwarding, so that — not the public apex — is the Host this
+        # app sees in production. Omitting it 421'd every request on the URL
+        # that goes into three directory listings.
+        r = await _initialize(client, {"Host": "api.ai-rete-rag.com"})
+        assert r.status_code == 200
+
+    @pytest.mark.anyio
+    async def test_a_browser_origin_is_allowed(self, client):
+        # `allowed_origins=["*"]` is not a wildcard in this SDK — it matches an
+        # Origin header whose literal value is `*`. Every real browser origin
+        # got a 403 while server-side callers, which send no Origin, passed.
+        r = await _initialize(client, {"Origin": "https://claude.ai"})
+        assert r.status_code == 200
+
+    @pytest.mark.anyio
+    async def test_an_unlisted_origin_is_still_rejected(self, client):
+        r = await _initialize(client, {"Origin": "https://evil.example"})
+        assert r.status_code == 403
+
+    @pytest.mark.anyio
+    async def test_preflight_is_answered(self, client):
+        # The MCP app routes GET, POST and DELETE, so a preflight reached it and
+        # got a 405 — and any request carrying Content-Type: application/json
+        # triggers one. Allowing the origin was necessary and not sufficient.
+        r = await client.options("/mcp", headers={
+            "Origin": "https://glama.ai",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,authorization",
+        })
+        assert r.status_code == 200
+        assert r.headers["access-control-allow-origin"] == "https://glama.ai"
+
+    @pytest.mark.anyio
+    async def test_the_response_a_browser_reads_carries_the_cors_headers(self, client):
+        # Without this header the browser blocks the response after the fact,
+        # even where no preflight was needed.
+        r = await _initialize(client, {"Origin": "https://glama.ai"})
+        assert r.headers["access-control-allow-origin"] == "https://glama.ai"
+        assert "mcp-session-id" in r.headers.get("access-control-expose-headers", "")
+
+    @pytest.mark.anyio
+    async def test_an_unlisted_origin_gets_no_cors_headers(self, client):
+        r = await client.options("/mcp", headers={
+            "Origin": "https://evil.example",
+            "Access-Control-Request-Method": "POST",
+        })
+        assert "access-control-allow-origin" not in r.headers
+
+
 class TestCredentialIsolation:
     """One process, many callers. A key must not outlive its request."""
 
