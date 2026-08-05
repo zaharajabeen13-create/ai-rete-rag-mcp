@@ -39,7 +39,7 @@ from starlette.routing import Mount, Route
 from mcp.server.transport_security import TransportSecuritySettings
 
 from . import __version__
-from .server import _request_api_key, mcp
+from .server import _request_api_key, _request_client_ip, mcp
 
 # Stateless: every call is independent, so a request's credential can never be
 # read by a later one over a kept-alive session, and the process can be
@@ -91,27 +91,40 @@ SERVER_CARD = {
 }
 
 
-class BearerKeyMiddleware(BaseHTTPMiddleware):
-    """Bind the caller's API key to this request, and only this request.
+class CallerContextMiddleware(BaseHTTPMiddleware):
+    """Bind the caller's identity to this request, and only this request.
 
     The key is passed straight through to the platform API, which already
     verifies `ik_` bearer tokens — so this transport stores no credentials,
     issues none, and can't be the thing that leaks them. A caller with no
     Authorization header is anonymous and reaches only the shared demo
-    domains, exactly as the stdio server does without a key set.
+    domains, exactly as the stdio server does without a key set. Anonymous
+    LLM spend is bounded by the API's own global cap on unauthenticated
+    explanations, not by anything here.
+
+    The caller's IP is captured too. The API rate-limits per client IP and
+    every call from here arrives over loopback, so without it all remote
+    users would share one bucket and throttle one another.
     """
 
     async def dispatch(self, request: Request, call_next):
         auth = request.headers.get("Authorization", "")
         key = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
 
-        # Reset in a finally: worker tasks are reused across requests, and a
-        # key left set would be inherited by whoever the worker serves next.
-        token = _request_api_key.set(key or None)
+        # request.client is the peer uvicorn accepted, resolved from the proxy
+        # headers nginx sets (it runs with --proxy-headers). Deliberately not
+        # read from the caller's own X-Forwarded-For, which they control.
+        client_ip = request.client.host if request.client else None
+
+        # Reset in a finally: worker tasks are reused across requests, and
+        # anything left set would be inherited by whoever the worker serves next.
+        key_token = _request_api_key.set(key or None)
+        ip_token = _request_client_ip.set(client_ip)
         try:
             return await call_next(request)
         finally:
-            _request_api_key.reset(token)
+            _request_api_key.reset(key_token)
+            _request_client_ip.reset(ip_token)
 
 
 async def health(_request: Request) -> Response:
@@ -133,7 +146,7 @@ def build_app() -> Starlette:
             # Mounted last: it owns everything beneath its own path.
             Mount("/", app=mcp_app),
         ],
-        middleware=[Middleware(BearerKeyMiddleware)],
+        middleware=[Middleware(CallerContextMiddleware)],
         # The MCP app runs a session manager that has to be started and stopped
         # with the process; without inheriting its lifespan the first call fails.
         lifespan=lambda _app: mcp_app.router.lifespan_context(_app),

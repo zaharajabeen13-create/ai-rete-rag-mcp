@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "com.ai-rete-rag/ai-rete-rag-mcp",
-  "title": "ai·rete·rag",
+  "title": "ai\u00b7rete\u00b7rag",
   "description": "Author rules from policy docs, then decide: a Rete engine gives the verdict, an LLM explains why.",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "repository": {
     "url": "https://github.com/zaharajabeen13-create/ai-rete-rag-mcp",
     "source": "github"
@@ -14,7 +14,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "ai-rete-rag-mcp",
-      "version": "0.5.4",
+      "version": "0.6.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -22,7 +22,7 @@
       "environmentVariables": [
         {
           "name": "AI_RETE_RAG_API_KEY",
-          "description": "Your ai·rete·rag API key (create one at ai-rete-rag.com under Settings -> API Keys). Authenticates calls and ties them to your plan quota.",
+          "description": "Your ai\u00b7rete\u00b7rag API key (create one at ai-rete-rag.com under Settings -> API Keys). Authenticates calls and ties them to your plan quota.",
           "isRequired": true,
           "isSecret": true
         },
@@ -31,6 +31,20 @@
           "description": "API base URL. Defaults to https://ai-rete-rag.com; override for local development.",
           "isRequired": false,
           "isSecret": false
+        }
+      ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://api.ai-rete-rag.com/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer <your ai-rete-rag API key> (ik_...), created at ai-rete-rag.com under Settings -> API Keys. Optional: without it the shared demo domains are still available.",
+          "isRequired": false,
+          "isSecret": true
         }
       ]
     }

@@ -34,6 +34,12 @@ USER_EMAIL = os.environ.get("AI_RETE_RAG_USER_EMAIL", "")
 # other's credential — a module global would leak one caller's key to the next.
 _request_api_key: ContextVar[str | None] = ContextVar("_request_api_key", default=None)
 
+# The remote caller's own IP, when serving over HTTP. The API rate-limits per
+# client IP, and every call from the hosted endpoint reaches it over loopback —
+# so without passing this along, all remote users share one bucket and throttle
+# each other. Unset over stdio, where the caller is the local machine.
+_request_client_ip: ContextVar[str | None] = ContextVar("_request_client_ip", default=None)
+
 
 def current_api_key() -> str:
     """The key this call should authenticate with: the request's, else the
@@ -56,6 +62,15 @@ mcp = FastMCP(
 
 def _headers() -> dict[str, str]:
     headers: dict[str, str] = {}
+
+    # Carries the real caller to the API's per-IP rate limiter. Taken from the
+    # connection the endpoint actually accepted, never from a header the caller
+    # sent — otherwise anyone could pick an IP and dodge the limit, or wear
+    # someone else's.
+    client_ip = _request_client_ip.get()
+    if client_ip:
+        headers["X-Forwarded-For"] = client_ip
+
     key = current_api_key()
     if key:
         headers["Authorization"] = f"Bearer {key}"

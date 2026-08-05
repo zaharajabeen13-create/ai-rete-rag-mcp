@@ -188,13 +188,55 @@ class TestCredentialIsolation:
             "X-User-Id": "someone-elses-account",
             "X-User-Email": "victim@example.com",
         })
-        assert sent == [{}]
+        # X-Forwarded-For is set from the accepted connection and belongs here;
+        # the identity headers are the ones that must not survive the hop.
+        assert "X-User-Id" not in sent[0]
+        assert "X-User-Email" not in sent[0]
+        assert "Authorization" not in sent[0]
 
     @pytest.mark.anyio
     async def test_non_bearer_authorization_is_ignored(self, client, seen_keys):
         await _call_tool(client, "list_documents", {"domain": "loan"},
                          headers={"Authorization": "Basic dXNlcjpwYXNz"})
         assert seen_keys == [""]
+
+
+class TestRateLimitAttribution:
+    """The API rate-limits per client IP, and every call from this endpoint
+    reaches it over loopback. Without forwarding the real caller, all remote
+    users share one bucket and throttle each other."""
+
+    @pytest.fixture
+    def sent_headers(self, monkeypatch) -> list[dict]:
+        captured: list[dict] = []
+
+        async def fake_request(method: str, path: str, **kwargs):
+            captured.append(srv._headers())
+            return "{}"
+
+        monkeypatch.setattr(srv, "_request", fake_request)
+        monkeypatch.setattr(srv, "API_KEY", "")
+        return captured
+
+    @pytest.mark.anyio
+    async def test_caller_ip_is_forwarded(self, client, sent_headers):
+        await _call_tool(client, "list_documents", {"domain": "loan"})
+        assert sent_headers[0].get("X-Forwarded-For")
+
+    @pytest.mark.anyio
+    async def test_caller_supplied_forwarded_for_is_not_trusted(self, client, sent_headers):
+        # Otherwise anyone could pick an IP to dodge the limit, or wear
+        # someone else's and exhaust their bucket.
+        await _call_tool(client, "list_documents", {"domain": "loan"},
+                         headers={"X-Forwarded-For": "203.0.113.9"})
+        assert sent_headers[0].get("X-Forwarded-For") != "203.0.113.9"
+
+    @pytest.mark.anyio
+    async def test_stdio_sends_no_forwarded_for(self, monkeypatch):
+        # Over stdio the caller is the local machine; inventing an IP here
+        # would attribute a local user's traffic to a made-up client.
+        monkeypatch.setattr(srv, "API_KEY", "ik_local")
+        assert "X-Forwarded-For" not in srv._headers()
 
 
 class TestAnonymousAccess:
