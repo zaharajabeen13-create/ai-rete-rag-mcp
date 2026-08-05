@@ -17,13 +17,17 @@ Run it:
 
 Connect to it:
 
-    https://api.ai-rete-rag.com/mcp    with  Authorization: Bearer ik_...
+    https://ai-rete-rag.com/mcp        with  Authorization: Bearer ik_...
 
-The host is `api.` and not the apex on purpose. nginx serves
-`api.ai-rete-rag.com`; the apex is Cloudflare Pages, and the Worker in front of
-it only re-routes `/api/*` to this box. A `/mcp` path on the apex would reach
-the SPA and 404, so the endpoint is published under the host that actually
-terminates it.
+The apex, not `api.`, and this is about TLS rather than routing. nginx serves
+`api.ai-rete-rag.com` and terminates with a **Cloudflare Origin CA** cert,
+which only Cloudflare trusts — that record is not proxied, so anything reaching
+it directly fails certificate validation (`SEC_E_UNTRUSTED_ROOT`, or
+`unable to get local issuer certificate`). The apex is proxied, so Cloudflare
+presents a publicly trusted certificate there.
+
+Reaching this box from the apex needs a Cloudflare Worker route for `/mcp/*`,
+exactly as `/api/*` already has. See deploy/README.md.
 """
 from __future__ import annotations
 
@@ -70,8 +74,10 @@ mcp.settings.transport_security = TransportSecuritySettings(
 )
 
 # The URL this endpoint is reachable at from outside, which is what goes into
-# directory listings — so it must be the host nginx actually terminates.
-PUBLIC_URL = os.environ.get("MCP_PUBLIC_URL", "https://api.ai-rete-rag.com/mcp")
+# directory listings — so it must be a host whose certificate the public trusts.
+# That is the apex: `api.` is unproxied and serves a Cloudflare Origin CA cert,
+# which fails validation for every client that is not Cloudflare.
+PUBLIC_URL = os.environ.get("MCP_PUBLIC_URL", "https://ai-rete-rag.com/mcp")
 
 # The server card is what Smithery reads when a tool scan doesn't succeed.
 SERVER_CARD = {
