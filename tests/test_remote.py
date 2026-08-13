@@ -411,6 +411,46 @@ class TestProtectedEndpoint:
         assert "www-authenticate" not in r.headers
 
     @pytest.mark.anyio
+    async def test_a_revoked_token_stops_working_at_once(self, client, monkeypatch):
+        """A success is never cached, so Disconnect takes effect on the next call.
+
+        It used to be cached for 60s, which meant a revoked token kept passing
+        this gate for up to a minute after the user pressed Disconnect — while
+        Settings told them it was immediate. Revocation is the one answer that
+        has to be fresh: it is the button someone reaches for when they believe
+        a connection is compromised.
+        """
+        live = {"ok": True}
+        calls = []
+
+        class _Reply:
+            def __init__(self, status_code): self.status_code = status_code
+
+        async def _ask(self, url, **kwargs):
+            calls.append(url)
+            return _Reply(200 if live["ok"] else 401)
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", _ask)
+        rm._TOKEN_CACHE.clear()
+
+        auth = {"Authorization": "Bearer mk_live"}
+        body = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                           "clientInfo": {"name": "t", "version": "0"}}}
+
+        assert (await client.post("/mcp/auth", headers={**MCP_HEADERS, **auth},
+                                  json=body)).status_code == 200
+        assert (await client.post("/mcp/auth", headers={**MCP_HEADERS, **auth},
+                                  json=body)).status_code == 200
+        # Every request asks — a second call must not be served from a cached yes.
+        assert len(calls) == 2, f"expected one check per request, got {len(calls)}"
+
+        live["ok"] = False   # the user pressed Disconnect
+        assert (await client.post("/mcp/auth", headers={**MCP_HEADERS, **auth},
+                                  json=body)).status_code == 401
+        rm._TOKEN_CACHE.clear()
+
+    @pytest.mark.anyio
     async def test_an_unreachable_api_fails_closed(self, client, monkeypatch):
         """A token we cannot verify is not a token we accept — answering
         otherwise would serve an anonymous session under an authenticated URL."""

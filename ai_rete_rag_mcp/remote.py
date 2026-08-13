@@ -177,16 +177,24 @@ SERVER_CARD = {
 # Verified tokens, briefly. Every MCP request would otherwise cost an extra
 # round trip to the API. Keyed by hash, never by the token itself — the same
 # reasoning as the platform's own token cache.
+# Only rejections are cached, and only briefly: long enough to blunt a guessing
+# loop that would otherwise turn this endpoint into a free oracle against the
+# API, short enough to be harmless. A cached rejection can never wrongly refuse
+# a live token — the key is the token's own hash, and a refreshed connection
+# carries a different token, so no entry here outlives what it describes.
+#
+# Successes are deliberately NOT cached. They were, for 60s, and it meant a
+# revoked token kept passing this gate for up to a minute after the user pressed
+# Disconnect — while Settings told them it took effect immediately. Revocation
+# is the one answer that has to be fresh, and it is the button someone reaches
+# for when they believe a connection is compromised. The saving was one loopback
+# call per request, next to the API call the tool behind it already makes.
 _TOKEN_CACHE: dict[str, tuple[bool, float]] = {}
-_TOKEN_TTL = 60.0
-# Rejections are cached too, for less time: long enough to blunt a guessing loop
-# that would otherwise turn this endpoint into a free oracle against the API,
-# short enough that a token which has just been refreshed works almost at once.
 _TOKEN_TTL_REJECTED = 10.0
 
 
 async def _token_is_valid(token: str) -> bool:
-    """Ask the API whether this connector token is good.
+    """Ask the API whether this connector token is good, every time.
 
     Deliberately not decided here. This process holds no signing key and no
     database, and asking keeps it that way — it stores no credentials, issues
@@ -196,7 +204,7 @@ async def _token_is_valid(token: str) -> bool:
     now = time.monotonic()
     hit = _TOKEN_CACHE.get(cache_key)
     if hit and hit[1] > now:
-        return hit[0]
+        return hit[0]   # only ever a cached rejection; see above
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(
@@ -209,7 +217,8 @@ async def _token_is_valid(token: str) -> bool:
         # URL, and every tool call behind it would fail anyway.
         return False
     valid = r.status_code == 200
-    _TOKEN_CACHE[cache_key] = (valid, now + (_TOKEN_TTL if valid else _TOKEN_TTL_REJECTED))
+    if not valid:
+        _TOKEN_CACHE[cache_key] = (False, now + _TOKEN_TTL_REJECTED)
     return valid
 
 
