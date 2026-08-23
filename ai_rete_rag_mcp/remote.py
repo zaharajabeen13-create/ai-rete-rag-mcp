@@ -11,6 +11,28 @@ The tools are not redefined here. `server.py` remains the single definition of
 what this server does; this module only changes how those definitions are
 reached and where the credential comes from.
 
+There are two endpoints, and the split is deliberate:
+
+    /mcp        anonymous, or `Authorization: Bearer ik_...` for clients that
+                can set a header. Advertises no OAuth, so a client connecting
+                here reaches the demo domains immediately with nothing to fill
+                in. This is the URL in every directory listing.
+
+    /mcp/auth   OAuth-protected. Answers 401 with a `WWW-Authenticate` pointing
+                at its protected-resource metadata, which is what makes
+                claude.ai and Claude Desktop run the sign-in flow — they have
+                no field for a static bearer header, so without this a
+                connector user is stuck anonymous with no way to reach their
+                own account from inside the client.
+
+Keeping them apart is what lets both audiences work. Merging them would mean
+choosing: advertise OAuth and every caller hits a sign-in wall, or don't and
+claude.ai users can never authenticate.
+
+The authorization server is the platform API, not this process — see
+backend/app/api/oauth.py. This module verifies nothing itself; it asks the API
+whether a token is good, so the property below still holds.
+
 Run it:
 
     uvicorn ai_rete_rag_mcp.remote:app --host 127.0.0.1 --port 8002
@@ -18,6 +40,7 @@ Run it:
 Connect to it:
 
     https://ai-rete-rag.com/mcp        with  Authorization: Bearer ik_...
+    https://ai-rete-rag.com/mcp/auth   with  Authorization: Bearer mk_...
 
 The apex, not `api.`, and this is about TLS rather than routing. nginx serves
 `api.ai-rete-rag.com` and terminates with a **Cloudflare Origin CA** cert,
@@ -31,8 +54,11 @@ exactly as `/api/*` already has. See deploy/README.md.
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import time
 
+import httpx
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -44,7 +70,7 @@ from starlette.routing import Mount, Route
 from mcp.server.transport_security import TransportSecuritySettings
 
 from . import __version__
-from .server import _request_api_key, _request_client_ip, mcp
+from .server import API_URL, _request_api_key, _request_client_ip, mcp
 
 # Stateless: every call is independent, so a request's credential can never be
 # read by a later one over a kept-alive session, and the process can be
@@ -110,6 +136,21 @@ _CORS_ORIGIN_REGEX = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
 # which fails validation for every client that is not Cloudflare.
 PUBLIC_URL = os.environ.get("MCP_PUBLIC_URL", "https://ai-rete-rag.com/mcp")
 
+# ── The OAuth-protected endpoint ───────────────────────────────────────────────
+
+# Where the protected endpoint lives, and where a client is told to look for the
+# metadata describing it. RFC 9728 builds the second from the first by inserting
+# the resource path after the well-known segment, so these two must stay in step.
+PROTECTED_PATH = "/mcp/auth"
+PROTECTED_RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource/mcp/auth"
+
+# The authorization server. Scoped to the protected resource rather than sitting
+# at the apex, so a client connecting to the anonymous /mcp finds no metadata
+# above it and never tries to authenticate there.
+OAUTH_ISSUER = os.environ.get("MCP_OAUTH_ISSUER", "https://ai-rete-rag.com/mcp/auth")
+PROTECTED_PUBLIC_URL = os.environ.get("MCP_PROTECTED_PUBLIC_URL",
+                                      "https://ai-rete-rag.com/mcp/auth")
+
 # The server card is what Smithery reads when a tool scan doesn't succeed.
 SERVER_CARD = {
     "name": "com.ai-rete-rag/ai-rete-rag-mcp",
@@ -124,8 +165,139 @@ SERVER_CARD = {
         "url": "https://github.com/zaharajabeen13-create/ai-rete-rag-mcp",
         "source": "github",
     },
-    "remotes": [{"type": "streamable-http", "url": PUBLIC_URL}],
+    # Both doors, anonymous first: that is the URL directories scan, and the one
+    # that works with nothing filled in.
+    "remotes": [
+        {"type": "streamable-http", "url": PUBLIC_URL},
+        {"type": "streamable-http", "url": PROTECTED_PUBLIC_URL},
+    ],
 }
+
+
+# Verified tokens, briefly. Every MCP request would otherwise cost an extra
+# round trip to the API. Keyed by hash, never by the token itself — the same
+# reasoning as the platform's own token cache.
+# Only rejections are cached, and only briefly: long enough to blunt a guessing
+# loop that would otherwise turn this endpoint into a free oracle against the
+# API, short enough to be harmless. A cached rejection can never wrongly refuse
+# a live token — the key is the token's own hash, and a refreshed connection
+# carries a different token, so no entry here outlives what it describes.
+#
+# Successes are deliberately NOT cached. They were, for 60s, and it meant a
+# revoked token kept passing this gate for up to a minute after the user pressed
+# Disconnect — while Settings told them it took effect immediately. Revocation
+# is the one answer that has to be fresh, and it is the button someone reaches
+# for when they believe a connection is compromised. The saving was one loopback
+# call per request, next to the API call the tool behind it already makes.
+_TOKEN_CACHE: dict[str, tuple[bool, float]] = {}
+_TOKEN_TTL_REJECTED = 10.0
+
+
+async def _token_is_valid(token: str) -> bool:
+    """Ask the API whether this connector token is good, every time.
+
+    Deliberately not decided here. This process holds no signing key and no
+    database, and asking keeps it that way — it stores no credentials, issues
+    none, and still cannot be the thing that leaks them.
+    """
+    cache_key = hashlib.sha256(token.encode()).hexdigest()
+    now = time.monotonic()
+    hit = _TOKEN_CACHE.get(cache_key)
+    if hit and hit[1] > now:
+        return hit[0]   # only ever a cached rejection; see above
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"{API_URL}/api/v1/oauth/userinfo",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.RequestError:
+        # The API is unreachable. Fail closed — answering as though the token
+        # were good would hand out an anonymous session under an authenticated
+        # URL, and every tool call behind it would fail anyway.
+        return False
+    valid = r.status_code == 200
+    if not valid:
+        _TOKEN_CACHE[cache_key] = (False, now + _TOKEN_TTL_REJECTED)
+    return valid
+
+
+def _challenge(description: str) -> Response:
+    """401 in the shape that starts an OAuth flow.
+
+    The `resource_metadata` parameter is the whole point: it is how a client
+    that has never seen this server discovers where to register and sign in.
+    Without it a 401 is just a closed door.
+    """
+    metadata_url = f"{PROTECTED_PUBLIC_URL.rsplit('/mcp/auth', 1)[0]}{PROTECTED_RESOURCE_METADATA_PATH}"
+    return JSONResponse(
+        {"error": "invalid_token", "error_description": description},
+        status_code=401,
+        headers={
+            "WWW-Authenticate": (
+                f'Bearer resource_metadata="{metadata_url}", '
+                f'error="invalid_token", error_description="{description}"'
+            )
+        },
+    )
+
+
+class ProtectedEndpointMiddleware:
+    """Serve the same MCP app at /mcp/auth, behind a bearer gate.
+
+    `server.py` stays the single definition of what this server does — this
+    reaches the existing app rather than declaring a second one, rewriting the
+    path to the one FastMCP routes on. The gate runs first, so an
+    unauthenticated request never reaches the session manager at all.
+
+    Middleware rather than a Mount, because a Starlette Mount only matches
+    *below* its prefix: `POST /mcp/auth` with no trailing slash fell straight
+    past it into the catch-all mount and came back as a bare 404 — which a
+    client reads as "no such endpoint" rather than "sign in", so the OAuth flow
+    never starts. Intercepting before routing takes the trailing slash out of it.
+    """
+
+    def __init__(self, app, inner) -> None:
+        self.app = app
+        self.inner = inner
+        self.inner_path = mcp.settings.streamable_http_path
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or scope["path"].rstrip("/") != PROTECTED_PATH:
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive)
+        auth = request.headers.get("Authorization", "")
+        token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
+
+        if not token:
+            await _challenge("Sign in to use this endpoint.")(scope, receive, send)
+            return
+        if not await _token_is_valid(token):
+            await _challenge("Token is invalid, expired or revoked.")(scope, receive, send)
+            return
+
+        scope = dict(scope)
+        scope["path"] = self.inner_path
+        scope["raw_path"] = self.inner_path.encode()
+        await self.inner(scope, receive, send)
+
+
+async def protected_resource_metadata(_request: Request) -> Response:
+    """RFC 9728, for /mcp/auth only.
+
+    The same path under /mcp must keep 404ing — that 404 is what tells a client
+    the anonymous endpoint needs no sign-in, and it is the only thing standing
+    between the demo and a sign-in wall.
+    """
+    return JSONResponse({
+        "resource": PROTECTED_PUBLIC_URL,
+        "authorization_servers": [OAUTH_ISSUER],
+        "bearer_methods_supported": ["header"],
+        "scopes_supported": ["mcp"],
+        "resource_documentation": "https://ai-rete-rag.com/mcp",
+    })
 
 
 class CallerContextMiddleware(BaseHTTPMiddleware):
@@ -190,6 +362,10 @@ def build_app() -> Starlette:
             # otherwise swallow this and hand it to the MCP app, which 404s it.
             Route("/mcp/health", health, methods=["GET"]),
             Route("/.well-known/mcp/server-card.json", server_card, methods=["GET"]),
+            Route(PROTECTED_RESOURCE_METADATA_PATH, protected_resource_metadata,
+                  methods=["GET"]),
+            # /mcp/auth is not routed here — ProtectedEndpointMiddleware takes it
+            # before routing happens. See the note in that class.
             # Mounted last: it owns everything beneath its own path.
             Mount("/", app=mcp_app),
         ],
@@ -213,6 +389,9 @@ def build_app() -> Starlette:
                 expose_headers=["mcp-session-id", "mcp-protocol-version"],
             ),
             Middleware(CallerContextMiddleware),
+            # Innermost, so the caller context above is already bound when a
+            # gated request is handed to the MCP app.
+            Middleware(ProtectedEndpointMiddleware, inner=mcp_app),
         ],
         # The MCP app runs a session manager that has to be started and stopped
         # with the process; without inheriting its lifespan the first call fails.

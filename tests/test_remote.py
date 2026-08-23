@@ -14,6 +14,7 @@ import json
 import httpx
 import pytest
 
+from ai_rete_rag_mcp import remote as rm
 from ai_rete_rag_mcp import server as srv
 from ai_rete_rag_mcp.remote import app
 
@@ -325,3 +326,141 @@ class TestAnonymousAccess:
         monkeypatch.setattr(srv, "USER_ID", "")
         out = await srv.get_usage()
         assert "Authorization" in out and "AI_RETE_RAG_API_KEY" in out
+
+
+class TestProtectedEndpoint:
+    """/mcp/auth — the OAuth door, for clients that cannot send a static header.
+
+    The split is the thing under test. If OAuth ever leaks onto /mcp, every
+    anonymous caller — the demo, the directory scanners, Glama's in-browser
+    try-it — meets a sign-in wall instead of a decision.
+    """
+
+    @pytest.fixture()
+    def accepts_tokens(self, monkeypatch):
+        """Treat any mk_ token as good, without reaching for the API."""
+        async def _valid(token: str) -> bool:
+            return token.startswith("mk_")
+        monkeypatch.setattr(rm, "_token_is_valid", _valid)
+        rm._TOKEN_CACHE.clear()
+
+    @pytest.mark.anyio
+    async def test_challenges_a_caller_with_no_token(self, client):
+        r = await client.post("/mcp/auth", headers=MCP_HEADERS, json={
+            "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {},
+        })
+        assert r.status_code == 401
+        # The resource_metadata parameter is what starts the flow — without it a
+        # client has nowhere to discover registration and sign-in, and a 401 is
+        # just a closed door.
+        challenge = r.headers["www-authenticate"]
+        assert challenge.startswith("Bearer ")
+        assert "/.well-known/oauth-protected-resource/mcp/auth" in challenge
+
+    @pytest.mark.anyio
+    async def test_rejects_a_token_the_api_does_not_recognise(self, client, monkeypatch):
+        async def _invalid(token: str) -> bool:
+            return False
+        monkeypatch.setattr(rm, "_token_is_valid", _invalid)
+        rm._TOKEN_CACHE.clear()
+        r = await client.post("/mcp/auth", headers={**MCP_HEADERS,
+                                                    "Authorization": "Bearer mk_revoked"},
+                              json={"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                    "params": {}})
+        assert r.status_code == 401
+
+    @pytest.mark.anyio
+    async def test_a_valid_token_reaches_the_same_tools(self, client, accepts_tokens):
+        # Same definitions, different door — server.py is not duplicated.
+        auth = {"Authorization": "Bearer mk_good"}
+        r = await client.post("/mcp/auth", headers={**MCP_HEADERS, **auth}, json={
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "test", "version": "0"}},
+        })
+        assert r.status_code == 200
+        assert _parse(r)["result"]["serverInfo"]["name"] == "ai-rete-rag"
+
+    @pytest.mark.anyio
+    async def test_a_trailing_slash_is_still_the_protected_endpoint(self, client):
+        # Mounting this as a Starlette route matched only *below* the prefix, so
+        # the bare path fell through to the anonymous mount and 404'd — which a
+        # client reads as "no such endpoint", never starting the OAuth flow.
+        for path in ("/mcp/auth", "/mcp/auth/"):
+            r = await client.post(path, headers=MCP_HEADERS, json={
+                "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {},
+            })
+            assert r.status_code == 401, path
+
+    @pytest.mark.anyio
+    async def test_resource_metadata_is_served_for_the_protected_path_only(self, client):
+        r = await client.get("/.well-known/oauth-protected-resource/mcp/auth")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["resource"].endswith("/mcp/auth")
+        assert body["authorization_servers"]
+
+        # The same document must NOT exist for /mcp. That 404 is the signal that
+        # the anonymous endpoint needs no sign-in.
+        assert (await client.get("/.well-known/oauth-protected-resource/mcp")).status_code == 404
+
+    @pytest.mark.anyio
+    async def test_the_anonymous_endpoint_is_untouched(self, client):
+        r = await _initialize(client)
+        assert r.status_code == 200
+        assert "www-authenticate" not in r.headers
+
+    @pytest.mark.anyio
+    async def test_a_revoked_token_stops_working_at_once(self, client, monkeypatch):
+        """A success is never cached, so Disconnect takes effect on the next call.
+
+        It used to be cached for 60s, which meant a revoked token kept passing
+        this gate for up to a minute after the user pressed Disconnect — while
+        Settings told them it was immediate. Revocation is the one answer that
+        has to be fresh: it is the button someone reaches for when they believe
+        a connection is compromised.
+        """
+        live = {"ok": True}
+        calls = []
+
+        class _Reply:
+            def __init__(self, status_code): self.status_code = status_code
+
+        async def _ask(self, url, **kwargs):
+            calls.append(url)
+            return _Reply(200 if live["ok"] else 401)
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", _ask)
+        rm._TOKEN_CACHE.clear()
+
+        auth = {"Authorization": "Bearer mk_live"}
+        body = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                           "clientInfo": {"name": "t", "version": "0"}}}
+
+        assert (await client.post("/mcp/auth", headers={**MCP_HEADERS, **auth},
+                                  json=body)).status_code == 200
+        assert (await client.post("/mcp/auth", headers={**MCP_HEADERS, **auth},
+                                  json=body)).status_code == 200
+        # Every request asks — a second call must not be served from a cached yes.
+        assert len(calls) == 2, f"expected one check per request, got {len(calls)}"
+
+        live["ok"] = False   # the user pressed Disconnect
+        assert (await client.post("/mcp/auth", headers={**MCP_HEADERS, **auth},
+                                  json=body)).status_code == 401
+        rm._TOKEN_CACHE.clear()
+
+    @pytest.mark.anyio
+    async def test_an_unreachable_api_fails_closed(self, client, monkeypatch):
+        """A token we cannot verify is not a token we accept — answering
+        otherwise would serve an anonymous session under an authenticated URL."""
+        async def _boom(*_args, **_kwargs):
+            raise httpx.ConnectError("no route")
+        monkeypatch.setattr(httpx.AsyncClient, "get", _boom)
+        rm._TOKEN_CACHE.clear()
+        r = await client.post("/mcp/auth", headers={**MCP_HEADERS,
+                                                    "Authorization": "Bearer mk_unknown"},
+                              json={"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                    "params": {}})
+        assert r.status_code == 401
+        rm._TOKEN_CACHE.clear()

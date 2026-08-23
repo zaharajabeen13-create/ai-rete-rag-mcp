@@ -21,6 +21,21 @@ the LLM only explains *why*, grounded in your ingested policy documents.
 | `list_documents` | Browse a domain's ingested documents |
 | `get_usage` | Check your plan and remaining monthly decision quota |
 
+## Connect by URL (no install)
+
+The server is also hosted, which is the only route for clients that connect to a
+URL and have no field for a static header — claude.ai and Claude Desktop custom
+connectors, in particular.
+
+| URL | Auth | Reaches |
+|---|---|---|
+| `https://ai-rete-rag.com/mcp/auth` | Sign in with Google, once, in the browser | Your account — your domains, your plan quota |
+| `https://ai-rete-rag.com/mcp` | None, or `Authorization: Bearer ik_...` | Shared demo domains anonymously; your account with a key |
+
+Add `https://ai-rete-rag.com/mcp/auth` as a custom connector and approve the
+prompt. Connections are listed under **Settings → Connected apps**, and
+disconnecting one takes effect immediately.
+
 ## Install
 
 No install needed with [uv](https://docs.astral.sh/uv/) — `uvx ai-rete-rag-mcp`
@@ -45,6 +60,13 @@ claude mcp add ai-rete-rag -e AI_RETE_RAG_API_KEY=ik_your-key-here -- uvx ai-ret
 ```
 
 (If you installed via pip, use `-- ai-rete-rag-mcp` instead of `-- uvx ai-rete-rag-mcp`.)
+
+Or skip the install entirely and point it at the hosted endpoint with your key:
+
+```bash
+claude mcp add --transport http ai-rete-rag https://ai-rete-rag.com/mcp \
+  --header "Authorization: Bearer ik_your-key-here"
+```
 
 ### Claude Desktop / other clients (JSON)
 
