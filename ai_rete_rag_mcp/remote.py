@@ -70,7 +70,12 @@ from starlette.routing import Mount, Route
 from mcp.server.transport_security import TransportSecuritySettings
 
 from . import __version__
+from . import server as _server
 from .server import API_URL, _request_api_key, _request_client_ip, mcp
+
+# Every tool call this process makes is a hosted-endpoint call. The API only
+# believes the label over loopback (see _usage_channel in the API's routes.py).
+_server.CHANNEL = "mcp-remote"
 
 # Stateless: every call is independent, so a request's credential can never be
 # read by a later one over a kept-alive session, and the process can be
