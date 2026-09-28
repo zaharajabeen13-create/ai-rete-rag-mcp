@@ -308,6 +308,35 @@ class TestRateLimitAttribution:
         assert "X-Forwarded-For" not in srv._headers()
 
 
+class TestUsageChannel:
+    """Calls are labelled for the API's identity-free day-level counts, so the
+    hosted endpoint, local installs and the website can be told apart."""
+
+    @pytest.mark.anyio
+    async def test_hosted_endpoint_labels_calls_mcp_remote(self, client, monkeypatch):
+        sent: list[dict] = []
+
+        async def fake_request(method: str, path: str, **kwargs):
+            sent.append(srv._headers())
+            return "{}"
+
+        monkeypatch.setattr(srv, "_request", fake_request)
+        await _call_tool(client, "list_documents", {"domain": "loan"})
+        assert sent[0]["X-Client-Channel"] == "mcp-remote"
+
+    def test_stdio_server_alone_labels_calls_mcp_stdio(self):
+        # A separate interpreter: importing remote (as this module does)
+        # switches the label for the whole process, which is the point.
+        import subprocess
+        import sys
+        out = subprocess.run(
+            [sys.executable, "-c",
+             "from ai_rete_rag_mcp import server; print(server._headers()['X-Client-Channel'])"],
+            capture_output=True, text=True, check=True,
+        )
+        assert out.stdout.strip() == "mcp-stdio"
+
+
 class TestAnonymousAccess:
     @pytest.mark.anyio
     async def test_no_key_still_lists_tools(self, client):

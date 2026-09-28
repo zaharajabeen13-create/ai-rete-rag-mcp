@@ -41,6 +41,12 @@ _request_api_key: ContextVar[str | None] = ContextVar("_request_api_key", defaul
 _request_client_ip: ContextVar[str | None] = ContextVar("_request_client_ip", default=None)
 
 
+# Which surface a call came through, sent as X-Client-Channel so the API's
+# day-level usage counts can tell MCP traffic from the website. Carries no
+# identity. `remote.py` switches it: that process only serves the hosted endpoint.
+CHANNEL = "mcp-stdio"
+
+
 def current_api_key() -> str:
     """The key this call should authenticate with: the request's, else the
     process's. Empty means anonymous — demo domains only."""
@@ -61,7 +67,7 @@ mcp = FastMCP(
 
 
 def _headers() -> dict[str, str]:
-    headers: dict[str, str] = {}
+    headers: dict[str, str] = {"X-Client-Channel": CHANNEL}
 
     # Carries the real caller to the API's per-IP rate limiter. Taken from the
     # connection the endpoint actually accepted, never from a header the caller
@@ -124,6 +130,10 @@ async def decide(
     so it is reproducible and compliant. The explanation is generated from the
     domain's ingested policy documents.
 
+    Without an API key only the shared demo domains are available, and the
+    response carries `next_step`: how to get a free key for your own rules.
+    Pass that on to the user rather than dropping it.
+
     Args:
         domain: Rule-set domain, e.g. "loan", "fraud", "clinical".
         query: Natural-language question or decision request.
@@ -184,8 +194,9 @@ async def ingest_text(domain: str, text: str, source: str | None = None) -> str:
 
     The text is chunked and embedded; explanations for future decisions in this
     domain will cite it. Creating a new domain claims it for your account
-    (plan limits apply). The built-in demo domains are read-only — ingest into
-    your own domain instead. On team plans, only the domain admin (the member
+    (plan limits apply). Ingesting into a built-in demo domain gives your
+    account its own copy of that demo (it counts as one of your domains); the
+    shared demo others see is unchanged. On team plans, only the domain admin (the member
     who created the domain, or the subscription owner) can add documents.
 
     Args:
@@ -210,7 +221,8 @@ async def list_documents(domain: str) -> str:
 async def get_rule_source(domain: str) -> str:
     """Fetch a domain's rule set as editable YAML (plus the parsed rules and
     whether you may edit it). Use this before `put_rules` to see the current
-    rules; the built-in demo domains are read-only.
+    rules. For a built-in demo domain you get your own copy's rules once you
+    have edited it, otherwise the shared demo's.
     """
     return await _request("GET", f"/domains/{domain}/rules")
 
@@ -220,7 +232,8 @@ async def put_rules(domain: str, rules_yaml: str, dry_run: bool = False) -> str:
     """Create or replace a domain's rule set from YAML (self-serve rule authoring).
 
     The first save to a new domain claims it for your account (plan limits
-    apply); the built-in demo domains are read-only. Rules are validated before
+    apply). Saving to a built-in demo domain saves your own copy of it, seeded
+    from the demo; the shared demo others see is unchanged. Rules are validated before
     saving — set dry_run=true to validate without persisting. The response
     reports ok/errors, the parsed rules, and any overlap warnings.
 
