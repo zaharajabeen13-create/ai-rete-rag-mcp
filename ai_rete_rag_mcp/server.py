@@ -61,8 +61,7 @@ mcp = FastMCP(
         "a known domain. To decide from a user's case, call `get_parameters` first to "
         "learn which facts the domain's rules decide on, collect those, then `decide`; "
         "if the result lists `missing_parameters`, the verdict could still change, so "
-        "ask for those facts and decide again. For photos, voice notes or video, use "
-        "`decide_from_media` with local file paths. Author your own rules with `put_rules` (YAML; use dry_run to validate). "
+        "ask for those facts and decide again. Author your own rules with `put_rules` (YAML; use dry_run to validate). "
         "Built-in demo domains: loan, fraud, clinical, blockchain, insurance, "
         "legal, operations, ecommerce."
     ),
@@ -176,51 +175,6 @@ async def decide(
     if extract_from_retrieval:
         body["extract_from_retrieval"] = True
     return await _request("POST", "/decide", json=body)
-
-
-@mcp.tool(title="Decide from photos, voice or video",
-          annotations={"readOnlyHint": False, "destructiveHint": False})
-async def decide_from_media(
-    domain: str,
-    query: str,
-    file_paths: list[str],
-    facts: dict[str, Any] | None = None,
-    response_mode: Literal["verdict_only", "verdict_with_explanation", "full_audit"] = "verdict_with_explanation",
-) -> str:
-    """Make a decision from photos, voice notes and/or videos on this machine.
-
-    Facts are read from the media against the domain's rule parameters (the
-    fields `get_parameters` lists), then the rules decide exactly as `decide`
-    does: photos and document scans are read directly, videos are sampled
-    into frames with their audio transcribed, voice notes are transcribed.
-    Needs an API key (signed-in account).
-
-    Args:
-        domain: Rule-set domain.
-        query: Natural-language question or decision request.
-        file_paths: Local paths, up to 5: images (.jpg .png .gif .webp),
-            audio (.mp3 .wav .m4a .ogg .webm …) or video (.mp4 .mov .mkv …).
-        facts: Facts you already have; these win over anything read from media.
-        response_mode: As for `decide`.
-
-    Check `missing_parameters` in the result, as for `decide`.
-    """
-    if CHANNEL != "mcp-stdio":
-        return ("Error: decide_from_media reads local files, so it is only available "
-                "when the MCP server runs on your machine (uvx ai-rete-rag-mcp).")
-    import mimetypes
-    from pathlib import Path
-
-    uploads = []
-    for raw in file_paths:
-        path = Path(raw).expanduser()
-        if not path.is_file():
-            return f"Error: no such file: {raw}"
-        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        uploads.append(("files", (path.name, path.read_bytes(), mime)))
-    data = {"domain": domain, "query": query, "facts": json.dumps(facts or {}),
-            "response_mode": response_mode}
-    return await _request("POST", "/decide/media", data=data, files=uploads)
 
 
 @mcp.tool(title="List rules", annotations={"readOnlyHint": True})

@@ -14,7 +14,6 @@ the LLM only explains *why*, grounded in your ingested policy documents.
 |---|---|
 | `decide` | Make a decision in a domain — structured facts and/or free text, with optional Pattern 01 (rules scope retrieval) and Pattern 02 (retrieval into working memory) |
 | `get_parameters` | The facts a domain's rules decide on (from your account's own rules), most decisive first — what to collect before `decide` |
-| `decide_from_media` | Decide from local photos, voice notes or videos — facts are read against the rule parameters, then the rules decide (local/stdio only) |
 | `list_rules` | Inspect a domain's rules — conditions, verdicts, salience, overlaps |
 | `get_rule_source` | Fetch a domain's rule set as editable YAML |
 | `import_policy_rules` | Turn a written policy document into draft rules, each citing the sentence it encodes (nothing is saved — review, then `put_rules`) |
