@@ -61,7 +61,10 @@ mcp = FastMCP(
         "a known domain. To decide from a user's case, call `get_parameters` first to "
         "learn which facts the domain's rules decide on, collect those, then `decide`; "
         "if the result lists `missing_parameters`, the verdict could still change, so "
-        "ask for those facts and decide again. Author your own rules with `put_rules` (YAML; use dry_run to validate). "
+        "ask for those facts and decide again. When the case arrives as photos, voice "
+        "notes or video, read them yourself, pass the values you found as `facts` "
+        "under the `get_parameters` field names, and pass any transcript or "
+        "description as `unstructured_text`. Author your own rules with `put_rules` (YAML; use dry_run to validate). "
         "Built-in demo domains: loan, fraud, clinical, blockchain, insurance, "
         "legal, operations, ecommerce."
     ),
@@ -142,8 +145,12 @@ async def decide(
         facts: Structured facts for working memory, e.g.
             {"credit_score": 710, "annual_income": 85000}. Use
             `get_parameters` to see which fields a domain's rules test.
-        unstructured_text: Optional free text (an application, a case note);
-            facts are extracted from it automatically and merged.
+            Facts you read yourself from photos, document scans, voice notes
+            or video go here, under those field names; explicit facts always
+            win over anything extracted server-side.
+        unstructured_text: Optional free text (an application, a case note,
+            a voice-note transcript, what a photo or video shows); facts are
+            extracted from it automatically and merged.
         response_mode: "verdict_only" (fastest), "verdict_with_explanation",
             or "full_audit" (every rule evaluation + retrieved chunks, available
             on every plan including the free tier).
@@ -213,19 +220,25 @@ async def get_parameters(domain: str) -> str:
 
 @mcp.prompt(title="Decide a case")
 def decide_case(domain: str, case: str) -> str:
-    """Agent workflow: pick the parameters a domain's rules need from a case
-    description, ask for what is missing, and reach a rule-backed verdict."""
+    """Agent workflow: pick the parameters a domain's rules need from a case —
+    text, photos, voice notes or video — ask for what is missing, and reach a
+    rule-backed verdict."""
     return (
         f"Decide this case in the ai·rete·rag domain `{domain}`.\n\n"
         f"Case:\n{case}\n\n"
-        "1. Call `get_parameters` for the domain. Map what the case states onto "
-        "those exact field names, converting to the units and scale the rule "
-        "tests use (e.g. 31% DTI tested against 0.36 → 0.31). Do not invent values.\n"
-        "2. Call `decide` with those facts (pass the case text as "
-        "`unstructured_text` too).\n"
-        "3. If `missing_parameters` is non-empty, the verdict is provisional: ask "
+        "1. Call `get_parameters` for the domain.\n"
+        "2. Read the case evidence yourself — the text, plus any photos, document "
+        "scans, voice notes or video attached or referenced (use whatever "
+        "transcription or frame tools you have for audio and video). Map what it "
+        "shows onto those exact field names, converting to the units and scale the "
+        "rule tests use (e.g. 31% DTI tested against 0.36 → 0.31). Only use values "
+        "you can actually see, hear or read; do not invent or estimate them.\n"
+        "3. Call `decide` with those facts. Pass the case text, and any transcript "
+        "or short description of what the media shows, as `unstructured_text`.\n"
+        "4. If `missing_parameters` is non-empty, the verdict is provisional: ask "
         "me for those facts, most decisive first, then decide again with them.\n"
-        "4. Report the verdict, the deciding rule and its reason, the facts used, "
+        "5. Report the verdict, the deciding rule and its reason, the facts used "
+        "and which file each came from, "
         "and the decision_id for the audit trail. The verdict comes from the "
         "rules — never override or soften it."
     )
