@@ -108,7 +108,7 @@ class TestEndpointBasics:
         assert _parse(r)["result"]["serverInfo"]["name"] == "ai-rete-rag"
 
     @pytest.mark.anyio
-    async def test_all_nine_tools_are_exposed(self, client):
+    async def test_all_ten_tools_are_exposed(self, client):
         # The remote transport must expose exactly what stdio does — same
         # definitions, different door.
         await _initialize(client)
@@ -118,6 +118,7 @@ class TestEndpointBasics:
         assert {t["name"] for t in _parse(r)["result"]["tools"]} == {
             "decide", "list_rules", "get_rule_source", "import_policy_rules",
             "put_rules", "ingest_text", "list_documents", "get_usage", "get_parameters",
+            "decide_from_media",
         }
 
 
