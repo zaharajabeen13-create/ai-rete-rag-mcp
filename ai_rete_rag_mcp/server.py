@@ -63,8 +63,8 @@ mcp = FastMCP(
         "if the result lists `missing_parameters`, the verdict could still change, so "
         "ask for those facts and decide again. When the case arrives as photos, voice "
         "notes or video, read them yourself, pass the values you found as `facts` "
-        "under the `get_parameters` field names, and pass any transcript or "
-        "description as `unstructured_text`. Author your own rules with `put_rules` (YAML; use dry_run to validate). "
+        "under the `get_parameters` field names with `fact_sources` naming the file "
+        "each came from, and pass any transcript or description as `unstructured_text`. Author your own rules with `put_rules` (YAML; use dry_run to validate). "
         "Built-in demo domains: loan, fraud, clinical, blockchain, insurance, "
         "legal, operations, ecommerce."
     ),
@@ -128,6 +128,7 @@ async def decide(
     response_mode: Literal["verdict_only", "verdict_with_explanation", "full_audit"] = "verdict_with_explanation",
     filter_retrieval_with_rules: bool = False,
     extract_from_retrieval: bool = False,
+    fact_sources: dict[str, str] | None = None,
 ) -> str:
     """Make a deterministic, auditable decision in a domain.
 
@@ -148,6 +149,12 @@ async def decide(
             Facts you read yourself from photos, document scans, voice notes
             or video go here, under those field names; explicit facts always
             win over anything extracted server-side.
+        fact_sources: Where each fact in `facts` came from, e.g.
+            {"monthly_income": "payslip.jpg", "claim_usd": "voice note 1"}.
+            Always set this for facts you read from a file, photo, recording
+            or video: it is stored in the decision's audit record so a
+            reviewer can tell typed facts from ones read off evidence. Facts
+            without a source are recorded as "request".
         unstructured_text: Optional free text (an application, a case note,
             a voice-note transcript, what a photo or video shows); facts are
             extracted from it automatically and merged.
@@ -181,6 +188,8 @@ async def decide(
         body["filter_retrieval_with_rules"] = True
     if extract_from_retrieval:
         body["extract_from_retrieval"] = True
+    if fact_sources:
+        body["fact_sources"] = fact_sources
     return await _request("POST", "/decide", json=body)
 
 
@@ -233,12 +242,14 @@ def decide_case(domain: str, case: str) -> str:
         "shows onto those exact field names, converting to the units and scale the "
         "rule tests use (e.g. 31% DTI tested against 0.36 → 0.31). Only use values "
         "you can actually see, hear or read; do not invent or estimate them.\n"
-        "3. Call `decide` with those facts. Pass the case text, and any transcript "
-        "or short description of what the media shows, as `unstructured_text`.\n"
+        "3. Call `decide` with those facts and `fact_sources` naming where each one "
+        "came from (the file name, or \"user message\" for facts stated in text). "
+        "Pass the case text, and any transcript or short description of what the "
+        "media shows, as `unstructured_text`.\n"
         "4. If `missing_parameters` is non-empty, the verdict is provisional: ask "
         "me for those facts, most decisive first, then decide again with them.\n"
         "5. Report the verdict, the deciding rule and its reason, the facts used "
-        "and which file each came from, "
+        "and the `fact_sources` recorded for them, "
         "and the decision_id for the audit trail. The verdict comes from the "
         "rules — never override or soften it."
     )
