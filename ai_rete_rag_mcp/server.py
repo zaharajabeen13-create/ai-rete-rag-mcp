@@ -58,8 +58,10 @@ mcp = FastMCP(
         "ai·rete·rag combines a deterministic Rete rule engine with RAG so decisions are "
         "auditable (rules decide the verdict) and explainable (an LLM explains why, "
         "grounded in the domain's policy documents). Use `decide` for any decision in "
-        "a known domain; use `list_rules` first if you are unsure which facts a domain "
-        "expects. Author your own rules with `put_rules` (YAML; use dry_run to validate). "
+        "a known domain. To decide from a user's case, call `get_parameters` first to "
+        "learn which facts the domain's rules decide on, collect those, then `decide`; "
+        "if the result lists `missing_parameters`, the verdict could still change, so "
+        "ask for those facts and decide again. Author your own rules with `put_rules` (YAML; use dry_run to validate). "
         "Built-in demo domains: loan, fraud, clinical, blockchain, insurance, "
         "legal, operations, ecommerce."
     ),
@@ -138,8 +140,8 @@ async def decide(
         domain: Rule-set domain, e.g. "loan", "fraud", "clinical".
         query: Natural-language question or decision request.
         facts: Structured facts for working memory, e.g.
-            {"credit_score": 710, "annual_income": 85000}. Use `list_rules`
-            to see which fields a domain's rules test.
+            {"credit_score": 710, "annual_income": 85000}. Use
+            `get_parameters` to see which fields a domain's rules test.
         unstructured_text: Optional free text (an application, a case note);
             facts are extracted from it automatically and merged.
         response_mode: "verdict_only" (fastest), "verdict_with_explanation",
@@ -154,6 +156,11 @@ async def decide(
         extract_from_retrieval: Pattern 02 — parse the retrieved documents into
             facts and assert them into working memory, so rules fire on what was
             actually read (not just the facts you passed).
+
+    The result's `missing_parameters` lists rule inputs that were not
+    supplied but could still change the verdict, most decisive first. When it
+    is non-empty, tell the user the verdict is provisional and ask for those
+    facts; when it is empty, more facts cannot change the verdict.
     """
     body: dict[str, Any] = {
         "domain": domain,
@@ -186,6 +193,42 @@ async def list_rules(domain: str | None = None) -> str:
     """
     params = {"domain": domain} if domain else None
     return await _request("GET", "/rules", params=params)
+
+
+@mcp.tool(title="Get decision parameters", annotations={"readOnlyHint": True})
+async def get_parameters(domain: str) -> str:
+    """List the input parameters a domain's rules decide on — the facts to
+    collect before calling `decide`. Derived from your account's own copy of
+    the rules, so it covers your custom domains too.
+
+    Each parameter has its `field` name (the key to use in `facts`), `kind`
+    (number / boolean / string), the `tests` rules make on it (e.g. >= 720 —
+    match these units and scales), the `rules` and `verdicts` it can lead to,
+    and `max_salience`. Parameters come most decisive first: those feeding
+    the highest-salience rules, which win when several rules fire. Also
+    returns every verdict the domain can reach.
+    """
+    return await _request("GET", f"/domains/{domain}/parameters")
+
+
+@mcp.prompt(title="Decide a case")
+def decide_case(domain: str, case: str) -> str:
+    """Agent workflow: pick the parameters a domain's rules need from a case
+    description, ask for what is missing, and reach a rule-backed verdict."""
+    return (
+        f"Decide this case in the ai·rete·rag domain `{domain}`.\n\n"
+        f"Case:\n{case}\n\n"
+        "1. Call `get_parameters` for the domain. Map what the case states onto "
+        "those exact field names, converting to the units and scale the rule "
+        "tests use (e.g. 31% DTI tested against 0.36 → 0.31). Do not invent values.\n"
+        "2. Call `decide` with those facts (pass the case text as "
+        "`unstructured_text` too).\n"
+        "3. If `missing_parameters` is non-empty, the verdict is provisional: ask "
+        "me for those facts, most decisive first, then decide again with them.\n"
+        "4. Report the verdict, the deciding rule and its reason, the facts used, "
+        "and the decision_id for the audit trail. The verdict comes from the "
+        "rules — never override or soften it."
+    )
 
 
 @mcp.tool(title="Ingest policy text", annotations={"readOnlyHint": False, "destructiveHint": False})
