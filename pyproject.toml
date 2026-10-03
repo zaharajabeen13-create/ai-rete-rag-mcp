@@ -1,6 +1,6 @@
 [project]
 name = "ai-rete-rag-mcp"
-version = "0.8.0"
+version = "0.9.0"
 description = "MCP server for ai·rete·rag — deterministic rule-based decisions with RAG-powered explanations"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,7 +22,7 @@ remote = ["uvicorn>=0.30", "starlette>=0.37"]
 
 [project.urls]
 Homepage = "https://ai-rete-rag.com"
-Documentation = "https://ai-rete-rag.com/docs-site"
+Documentation = "https://ai-rete-rag.com/integrations/mcp"
 
 [project.scripts]
 ai-rete-rag-mcp = "ai_rete_rag_mcp.server:main"
