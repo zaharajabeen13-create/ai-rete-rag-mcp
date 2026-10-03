@@ -13,6 +13,7 @@ the LLM only explains *why*, grounded in your ingested policy documents.
 | Tool | What it does |
 |---|---|
 | `decide` | Make a decision in a domain — structured facts and/or free text, with optional Pattern 01 (rules scope retrieval) and Pattern 02 (retrieval into working memory) |
+| `get_parameters` | The facts a domain's rules decide on (from your account's own rules), most decisive first — what to collect before `decide` |
 | `list_rules` | Inspect a domain's rules — conditions, verdicts, salience, overlaps |
 | `get_rule_source` | Fetch a domain's rule set as editable YAML |
 | `import_policy_rules` | Turn a written policy document into draft rules, each citing the sentence it encodes (nothing is saved — review, then `put_rules`) |
@@ -20,6 +21,18 @@ the LLM only explains *why*, grounded in your ingested policy documents.
 | `ingest_text` | Add policy text to a domain's knowledge base |
 | `list_documents` | Browse a domain's ingested documents |
 | `get_usage` | Check your plan and remaining monthly decision quota |
+
+## Prompt: `decide_case`
+
+An agent workflow for deciding a case in any domain on your account, including
+your own: it calls `get_parameters` to learn which facts the rules decide on,
+reads the case — text, photos, document scans, voice notes or video (the agent
+reads the media itself; the API only receives the facts) — maps it onto those
+exact fields, calls `decide` with `fact_sources` recording which file each fact
+came from (kept in the decision's audit trail), and — while the result's
+`missing_parameters` is non-empty (facts that could still change the verdict)
+— asks you for them, most decisive first, and decides again. The verdict always
+comes from the rules.
 
 ## Connect by URL (no install)
 

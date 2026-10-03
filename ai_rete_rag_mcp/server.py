@@ -58,8 +58,13 @@ mcp = FastMCP(
         "ai·rete·rag combines a deterministic Rete rule engine with RAG so decisions are "
         "auditable (rules decide the verdict) and explainable (an LLM explains why, "
         "grounded in the domain's policy documents). Use `decide` for any decision in "
-        "a known domain; use `list_rules` first if you are unsure which facts a domain "
-        "expects. Author your own rules with `put_rules` (YAML; use dry_run to validate). "
+        "a known domain. To decide from a user's case, call `get_parameters` first to "
+        "learn which facts the domain's rules decide on, collect those, then `decide`; "
+        "if the result lists `missing_parameters`, the verdict could still change, so "
+        "ask for those facts and decide again. When the case arrives as photos, voice "
+        "notes or video, read them yourself, pass the values you found as `facts` "
+        "under the `get_parameters` field names with `fact_sources` naming the file "
+        "each came from, and pass any transcript or description as `unstructured_text`. Author your own rules with `put_rules` (YAML; use dry_run to validate). "
         "Built-in demo domains: loan, fraud, clinical, blockchain, insurance, "
         "legal, operations, ecommerce."
     ),
@@ -123,6 +128,7 @@ async def decide(
     response_mode: Literal["verdict_only", "verdict_with_explanation", "full_audit"] = "verdict_with_explanation",
     filter_retrieval_with_rules: bool = False,
     extract_from_retrieval: bool = False,
+    fact_sources: dict[str, str] | None = None,
 ) -> str:
     """Make a deterministic, auditable decision in a domain.
 
@@ -138,10 +144,20 @@ async def decide(
         domain: Rule-set domain, e.g. "loan", "fraud", "clinical".
         query: Natural-language question or decision request.
         facts: Structured facts for working memory, e.g.
-            {"credit_score": 710, "annual_income": 85000}. Use `list_rules`
-            to see which fields a domain's rules test.
-        unstructured_text: Optional free text (an application, a case note);
-            facts are extracted from it automatically and merged.
+            {"credit_score": 710, "annual_income": 85000}. Use
+            `get_parameters` to see which fields a domain's rules test.
+            Facts you read yourself from photos, document scans, voice notes
+            or video go here, under those field names; explicit facts always
+            win over anything extracted server-side.
+        fact_sources: Where each fact in `facts` came from, e.g.
+            {"monthly_income": "payslip.jpg", "claim_usd": "voice note 1"}.
+            Always set this for facts you read from a file, photo, recording
+            or video: it is stored in the decision's audit record so a
+            reviewer can tell typed facts from ones read off evidence. Facts
+            without a source are recorded as "request".
+        unstructured_text: Optional free text (an application, a case note,
+            a voice-note transcript, what a photo or video shows); facts are
+            extracted from it automatically and merged.
         response_mode: "verdict_only" (fastest), "verdict_with_explanation",
             or "full_audit" (every rule evaluation + retrieved chunks, available
             on every plan including the free tier).
@@ -154,6 +170,11 @@ async def decide(
         extract_from_retrieval: Pattern 02 — parse the retrieved documents into
             facts and assert them into working memory, so rules fire on what was
             actually read (not just the facts you passed).
+
+    The result's `missing_parameters` lists rule inputs that were not
+    supplied but could still change the verdict, most decisive first. When it
+    is non-empty, tell the user the verdict is provisional and ask for those
+    facts; when it is empty, more facts cannot change the verdict.
     """
     body: dict[str, Any] = {
         "domain": domain,
@@ -167,6 +188,8 @@ async def decide(
         body["filter_retrieval_with_rules"] = True
     if extract_from_retrieval:
         body["extract_from_retrieval"] = True
+    if fact_sources:
+        body["fact_sources"] = fact_sources
     return await _request("POST", "/decide", json=body)
 
 
@@ -186,6 +209,50 @@ async def list_rules(domain: str | None = None) -> str:
     """
     params = {"domain": domain} if domain else None
     return await _request("GET", "/rules", params=params)
+
+
+@mcp.tool(title="Get decision parameters", annotations={"readOnlyHint": True})
+async def get_parameters(domain: str) -> str:
+    """List the input parameters a domain's rules decide on — the facts to
+    collect before calling `decide`. Derived from your account's own copy of
+    the rules, so it covers your custom domains too.
+
+    Each parameter has its `field` name (the key to use in `facts`), `kind`
+    (number / boolean / string), the `tests` rules make on it (e.g. >= 720 —
+    match these units and scales), the `rules` and `verdicts` it can lead to,
+    and `max_salience`. Parameters come most decisive first: those feeding
+    the highest-salience rules, which win when several rules fire. Also
+    returns every verdict the domain can reach.
+    """
+    return await _request("GET", f"/domains/{domain}/parameters")
+
+
+@mcp.prompt(title="Decide a case")
+def decide_case(domain: str, case: str) -> str:
+    """Agent workflow: pick the parameters a domain's rules need from a case —
+    text, photos, voice notes or video — ask for what is missing, and reach a
+    rule-backed verdict."""
+    return (
+        f"Decide this case in the ai·rete·rag domain `{domain}`.\n\n"
+        f"Case:\n{case}\n\n"
+        "1. Call `get_parameters` for the domain.\n"
+        "2. Read the case evidence yourself — the text, plus any photos, document "
+        "scans, voice notes or video attached or referenced (use whatever "
+        "transcription or frame tools you have for audio and video). Map what it "
+        "shows onto those exact field names, converting to the units and scale the "
+        "rule tests use (e.g. 31% DTI tested against 0.36 → 0.31). Only use values "
+        "you can actually see, hear or read; do not invent or estimate them.\n"
+        "3. Call `decide` with those facts and `fact_sources` naming where each one "
+        "came from (the file name, or \"user message\" for facts stated in text). "
+        "Pass the case text, and any transcript or short description of what the "
+        "media shows, as `unstructured_text`.\n"
+        "4. If `missing_parameters` is non-empty, the verdict is provisional: ask "
+        "me for those facts, most decisive first, then decide again with them.\n"
+        "5. Report the verdict, the deciding rule and its reason, the facts used "
+        "and the `fact_sources` recorded for them, "
+        "and the decision_id for the audit trail. The verdict comes from the "
+        "rules — never override or soften it."
+    )
 
 
 @mcp.tool(title="Ingest policy text", annotations={"readOnlyHint": False, "destructiveHint": False})

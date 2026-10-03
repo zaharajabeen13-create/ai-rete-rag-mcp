@@ -108,7 +108,7 @@ class TestEndpointBasics:
         assert _parse(r)["result"]["serverInfo"]["name"] == "ai-rete-rag"
 
     @pytest.mark.anyio
-    async def test_all_eight_tools_are_exposed(self, client):
+    async def test_all_nine_tools_are_exposed(self, client):
         # The remote transport must expose exactly what stdio does — same
         # definitions, different door.
         await _initialize(client)
@@ -117,7 +117,7 @@ class TestEndpointBasics:
         })
         assert {t["name"] for t in _parse(r)["result"]["tools"]} == {
             "decide", "list_rules", "get_rule_source", "import_policy_rules",
-            "put_rules", "ingest_text", "list_documents", "get_usage",
+            "put_rules", "ingest_text", "list_documents", "get_usage", "get_parameters",
         }
 
 
@@ -493,3 +493,35 @@ class TestProtectedEndpoint:
                                     "params": {}})
         assert r.status_code == 401
         rm._TOKEN_CACHE.clear()
+
+
+class TestFactSources:
+    """The decide tool carries the agent's fact provenance through to the API,
+    where it lands in the decision's audit record."""
+
+    @pytest.mark.anyio
+    async def test_fact_sources_reach_the_api(self, client, monkeypatch):
+        sent: list[dict] = []
+
+        async def fake_request(method: str, path: str, **kwargs):
+            sent.append(kwargs.get("json") or {})
+            return "{}"
+
+        monkeypatch.setattr(srv, "_request", fake_request)
+        await _call_tool(client, "decide", {
+            "domain": "loan", "query": "approve?", "facts": {"credit_score": 700},
+            "fact_sources": {"credit_score": "credit-report.pdf"},
+        })
+        assert sent[0]["fact_sources"] == {"credit_score": "credit-report.pdf"}
+
+    @pytest.mark.anyio
+    async def test_omitted_when_not_given(self, client, monkeypatch):
+        sent: list[dict] = []
+
+        async def fake_request(method: str, path: str, **kwargs):
+            sent.append(kwargs.get("json") or {})
+            return "{}"
+
+        monkeypatch.setattr(srv, "_request", fake_request)
+        await _call_tool(client, "decide", {"domain": "loan", "query": "approve?"})
+        assert "fact_sources" not in sent[0]
