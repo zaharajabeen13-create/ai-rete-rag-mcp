@@ -12,13 +12,13 @@ the LLM only explains *why*, grounded in your ingested policy documents.
 
 | Tool | What it does |
 |---|---|
-| `decide` | Make a decision in a domain — structured facts and/or free text, with optional Pattern 01 (rules scope retrieval) and Pattern 02 (retrieval into working memory) |
+| `decide` | Make a decision in a domain — structured facts and/or free text, with optional Pattern 01 (rules scope retrieval) and Pattern 02 (retrieval into working memory). `as_of` reads the policy documents in force on an earlier day |
 | `get_parameters` | The facts a domain's rules decide on (from your account's own rules), most decisive first — what to collect before `decide` |
 | `list_rules` | Inspect a domain's rules — conditions, verdicts, salience, overlaps |
 | `get_rule_source` | Fetch a domain's rule set as editable YAML |
 | `import_policy_rules` | Turn a written policy document into draft rules, each citing the sentence it encodes (nothing is saved — review, then `put_rules`) |
 | `put_rules` | Create or replace a domain's rule set from YAML (dry_run to validate) |
-| `ingest_text` | Add policy text to a domain's knowledge base |
+| `ingest_text` | Add policy text to a domain's knowledge base, optionally dated (`effective_from`, `effective_until`) or replacing an earlier version (`supersedes`) |
 | `list_documents` | Browse a domain's ingested documents |
 | `get_usage` | Check your plan and remaining monthly decision quota |
 
