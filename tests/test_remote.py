@@ -525,3 +525,41 @@ class TestFactSources:
         monkeypatch.setattr(srv, "_request", fake_request)
         await _call_tool(client, "decide", {"domain": "loan", "query": "approve?"})
         assert "fact_sources" not in sent[0]
+
+
+class TestDocumentValidity:
+    """ingest_text carries document dates and supersession, and decide carries
+    as_of, through to the API; each is omitted when not given."""
+
+    @pytest.fixture
+    def sent(self, monkeypatch):
+        sent: list[dict] = []
+
+        async def fake_request(method: str, path: str, **kwargs):
+            sent.append(kwargs.get("json") or {})
+            return "{}"
+
+        monkeypatch.setattr(srv, "_request", fake_request)
+        return sent
+
+    @pytest.mark.anyio
+    async def test_ingest_passes_dates_and_supersedes(self, client, sent):
+        await _call_tool(client, "ingest_text", {
+            "domain": "loan", "text": "DTI limit is 40%", "source": "dti-2026.txt",
+            "effective_from": "2026-07-01", "supersedes": "dti-2025.txt",
+        })
+        assert sent[0]["effective_from"] == "2026-07-01"
+        assert sent[0]["supersedes"] == "dti-2025.txt"
+        assert "effective_until" not in sent[0]
+
+    @pytest.mark.anyio
+    async def test_ingest_without_dates_sends_none(self, client, sent):
+        await _call_tool(client, "ingest_text", {"domain": "loan", "text": "x"})
+        assert set(sent[0]) == {"domain", "text", "metadata"}
+
+    @pytest.mark.anyio
+    async def test_decide_passes_as_of(self, client, sent):
+        await _call_tool(client, "decide", {"domain": "loan", "query": "q", "as_of": "2026-06-30"})
+        assert sent[0]["as_of"] == "2026-06-30"
+        await _call_tool(client, "decide", {"domain": "loan", "query": "q"})
+        assert "as_of" not in sent[1]

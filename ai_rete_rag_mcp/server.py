@@ -129,6 +129,7 @@ async def decide(
     filter_retrieval_with_rules: bool = False,
     extract_from_retrieval: bool = False,
     fact_sources: dict[str, str] | None = None,
+    as_of: str | None = None,
 ) -> str:
     """Make a deterministic, auditable decision in a domain.
 
@@ -155,6 +156,10 @@ async def decide(
             or video: it is stored in the decision's audit record so a
             reviewer can tell typed facts from ones read off evidence. Facts
             without a source are recorded as "request".
+        as_of: Read the domain's policy documents as of this day, as
+            YYYY-MM-DD (default: today). Use the date a case was filed to
+            decide it under the policy in force then; the rules themselves are
+            always the current ones.
         unstructured_text: Optional free text (an application, a case note,
             a voice-note transcript, what a photo or video shows); facts are
             extracted from it automatically and merged.
@@ -190,6 +195,8 @@ async def decide(
         body["extract_from_retrieval"] = True
     if fact_sources:
         body["fact_sources"] = fact_sources
+    if as_of:
+        body["as_of"] = as_of
     return await _request("POST", "/decide", json=body)
 
 
@@ -256,7 +263,14 @@ def decide_case(domain: str, case: str) -> str:
 
 
 @mcp.tool(title="Ingest policy text", annotations={"readOnlyHint": False, "destructiveHint": False})
-async def ingest_text(domain: str, text: str, source: str | None = None) -> str:
+async def ingest_text(
+    domain: str,
+    text: str,
+    source: str | None = None,
+    effective_from: str | None = None,
+    effective_until: str | None = None,
+    supersedes: str | None = None,
+) -> str:
     """Add policy/reference text to a domain's knowledge base.
 
     The text is chunked and embedded; explanations for future decisions in this
@@ -266,16 +280,30 @@ async def ingest_text(domain: str, text: str, source: str | None = None) -> str:
     shared demo others see is unchanged. On team plans, only the domain admin (the member
     who created the domain, or the subscription owner) can add documents.
 
+    Documents can be dated. A decision only cites documents in force on its
+    date, so a replaced policy is never quoted for a new decision. To publish a
+    new version, ingest it under a new `source` with `supersedes` naming the old
+    one: the old document stops applying on the new one's `effective_from`
+    (today if not given), and the new one starts that day. A document can be
+    superseded only once; to replace a successor, supersede the successor.
+
     Args:
         domain: Domain to ingest into (existing or new).
         text: The policy or reference text.
         source: Optional source name shown in the document list.
+        effective_from: First day this document applies, as YYYY-MM-DD
+            (default: always).
+        effective_until: First day it no longer applies, as YYYY-MM-DD
+            (default: no end).
+        supersedes: Source name of the document this one replaces.
     """
     metadata = {"source": source} if source else {}
-    return await _request(
-        "POST", "/ingest/text",
-        json={"domain": domain, "text": text, "metadata": metadata},
-    )
+    body: dict[str, Any] = {"domain": domain, "text": text, "metadata": metadata}
+    for key, value in (("effective_from", effective_from), ("effective_until", effective_until),
+                       ("supersedes", supersedes)):
+        if value:
+            body[key] = value
+    return await _request("POST", "/ingest/text", json=body)
 
 
 @mcp.tool(title="List documents", annotations={"readOnlyHint": True})
