@@ -515,6 +515,21 @@ class TestFactSources:
         assert sent[0]["fact_sources"] == {"credit_score": "credit-report.pdf"}
 
     @pytest.mark.anyio
+    async def test_fact_observed_at_reaches_the_api(self, client, monkeypatch):
+        sent: list[dict] = []
+
+        async def fake_request(method: str, path: str, **kwargs):
+            sent.append(kwargs.get("json") or {})
+            return "{}"
+
+        monkeypatch.setattr(srv, "_request", fake_request)
+        await _call_tool(client, "decide", {
+            "domain": "loan", "query": "approve?", "facts": {"credit_score": 700},
+            "fact_observed_at": {"credit_score": "2026-10-12T09:30:00Z"},
+        })
+        assert sent[0]["fact_observed_at"] == {"credit_score": "2026-10-12T09:30:00Z"}
+
+    @pytest.mark.anyio
     async def test_omitted_when_not_given(self, client, monkeypatch):
         sent: list[dict] = []
 
@@ -525,6 +540,7 @@ class TestFactSources:
         monkeypatch.setattr(srv, "_request", fake_request)
         await _call_tool(client, "decide", {"domain": "loan", "query": "approve?"})
         assert "fact_sources" not in sent[0]
+        assert "fact_observed_at" not in sent[0]
 
 
 class TestDocumentValidity:

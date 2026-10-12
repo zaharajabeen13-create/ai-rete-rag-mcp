@@ -29,7 +29,8 @@ your own: it calls `get_parameters` to learn which facts the rules decide on,
 reads the case — text, photos, document scans, voice notes or video (the agent
 reads the media itself; the API only receives the facts) — maps it onto those
 exact fields, calls `decide` with `fact_sources` recording which file each fact
-came from (kept in the decision's audit trail), and — while the result's
+came from and `fact_observed_at` recording when it was read (both kept in the
+decision's audit trail), and — while the result's
 `missing_parameters` is non-empty (facts that could still change the verdict)
 — asks you for them, most decisive first, and decides again. The verdict always
 comes from the rules.

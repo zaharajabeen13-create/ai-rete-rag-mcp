@@ -129,6 +129,7 @@ async def decide(
     filter_retrieval_with_rules: bool = False,
     extract_from_retrieval: bool = False,
     fact_sources: dict[str, str] | None = None,
+    fact_observed_at: dict[str, str] | None = None,
     as_of: str | None = None,
 ) -> str:
     """Make a deterministic, auditable decision in a domain.
@@ -156,6 +157,13 @@ async def decide(
             or video: it is stored in the decision's audit record so a
             reviewer can tell typed facts from ones read off evidence. Facts
             without a source are recorded as "request".
+        fact_observed_at: When each fact in `facts` was read from its source,
+            as ISO 8601 times, e.g. {"balance_usd": "2026-10-12T09:30:00Z"}
+            (no offset means UTC). Set it whenever you know it — the time you
+            fetched a balance, the date on a payslip — so the audit record
+            shows how fresh each fact was. Facts without one are recorded
+            without a time; facts extracted server-side are stamped when
+            extracted.
         as_of: Read the domain's policy documents as of this day, as
             YYYY-MM-DD (default: today). Use the date a case was filed to
             decide it under the policy in force then; the rules themselves are
@@ -195,6 +203,8 @@ async def decide(
         body["extract_from_retrieval"] = True
     if fact_sources:
         body["fact_sources"] = fact_sources
+    if fact_observed_at:
+        body["fact_observed_at"] = fact_observed_at
     if as_of:
         body["as_of"] = as_of
     return await _request("POST", "/decide", json=body)
@@ -250,7 +260,9 @@ def decide_case(domain: str, case: str) -> str:
         "rule tests use (e.g. 31% DTI tested against 0.36 → 0.31). Only use values "
         "you can actually see, hear or read; do not invent or estimate them.\n"
         "3. Call `decide` with those facts and `fact_sources` naming where each one "
-        "came from (the file name, or \"user message\" for facts stated in text). "
+        "came from (the file name, or \"user message\" for facts stated in text), "
+        "and `fact_observed_at` with the time each was read, when the evidence "
+        "shows it (a statement date, a fetch time). "
         "Pass the case text, and any transcript or short description of what the "
         "media shows, as `unstructured_text`.\n"
         "4. If `missing_parameters` is non-empty, the verdict is provisional: ask "
