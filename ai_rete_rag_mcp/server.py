@@ -409,6 +409,12 @@ async def import_policy_rules(domain: str, policy_text: str) -> str:
     the policy stages its determinations), derived rule→rule edges, and overlap
     warnings. Each returned rule carries a `citation` field holding the policy
     sentence it encodes (also summarized in the top-level `citations` map).
+    Coverage runs the other way too: `uncovered_sentences` lists policy
+    sentences no rule's citation points back to (out of
+    `policy_sentence_count`), and `unverified_citations` names rules whose
+    quote is missing or not found verbatim in the policy. Show both to the
+    user: an uncovered sentence may need a rule; an unverified one may be a
+    paraphrase that misstates the policy.
     NOTHING IS SAVED: review the drafts (and show them to the user), then
     persist explicitly with `put_rules` — validate first with dry_run=true,
     and keep each rule's `citation` in the YAML you save so the audit trail
