@@ -20,7 +20,7 @@ from contextvars import ContextVar
 from typing import Any, Literal
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 API_URL = os.environ.get("AI_RETE_RAG_API_URL", "https://ai-rete-rag.com").rstrip("/")
 API_KEY = os.environ.get("AI_RETE_RAG_API_KEY", "")
@@ -52,7 +52,7 @@ def current_api_key() -> str:
     process's. Empty means anonymous — demo domains only."""
     return _request_api_key.get() or API_KEY
 
-mcp = FastMCP(
+mcp = MCPServer(
     "ai-rete-rag",
     instructions=(
         "ai·rete·rag combines a deterministic Rete rule engine with RAG so decisions are "
@@ -409,6 +409,15 @@ async def import_policy_rules(domain: str, policy_text: str) -> str:
     the policy stages its determinations), derived rule→rule edges, and overlap
     warnings. Each returned rule carries a `citation` field holding the policy
     sentence it encodes (also summarized in the top-level `citations` map).
+    Coverage runs the other way too: `uncovered_sentences` lists policy
+    sentences no rule's citation points back to (out of
+    `policy_sentence_count`), and `unverified_citations` names rules whose
+    quote is missing or not found verbatim in the policy. Show both to the
+    user: an uncovered sentence may need a rule; an unverified one may be a
+    paraphrase that misstates the policy. `background_sentences` is the subset
+    of uncovered sentences with no obligation language (definitions,
+    preamble); lead with the others, but mention these too, since the split
+    is a keyword heuristic.
     NOTHING IS SAVED: review the drafts (and show them to the user), then
     persist explicitly with `put_rules` — validate first with dry_run=true,
     and keep each rule's `citation` in the YAML you save so the audit trail
