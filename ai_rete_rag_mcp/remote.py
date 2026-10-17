@@ -80,7 +80,11 @@ _server.CHANNEL = "mcp-remote"
 # Stateless: every call is independent, so a request's credential can never be
 # read by a later one over a kept-alive session, and the process can be
 # restarted or run behind more than one worker without losing client state.
-mcp.settings.stateless_http = True
+STATELESS_HTTP = True
+
+# Where the SDK's app routes the MCP endpoint. Its own default, named here
+# because ProtectedEndpointMiddleware rewrites /mcp/auth onto it.
+STREAMABLE_HTTP_PATH = "/mcp"
 
 # DNS-rebinding protection is on by default in the SDK and rejects any Host it
 # was not told about with a 421 — including the real one. Behind nginx the Host
@@ -117,7 +121,7 @@ _ALLOWED_ORIGINS = [
     ).split(",") if o.strip()
 ]
 
-mcp.settings.transport_security = TransportSecuritySettings(
+TRANSPORT_SECURITY = TransportSecuritySettings(
     allowed_hosts=_ALLOWED_HOSTS,
     allowed_origins=_ALLOWED_ORIGINS,
 )
@@ -252,7 +256,7 @@ class ProtectedEndpointMiddleware:
 
     `server.py` stays the single definition of what this server does — this
     reaches the existing app rather than declaring a second one, rewriting the
-    path to the one FastMCP routes on. The gate runs first, so an
+    path to the one the SDK's app routes on. The gate runs first, so an
     unauthenticated request never reaches the session manager at all.
 
     Middleware rather than a Mount, because a Starlette Mount only matches
@@ -265,7 +269,7 @@ class ProtectedEndpointMiddleware:
     def __init__(self, app, inner) -> None:
         self.app = app
         self.inner = inner
-        self.inner_path = mcp.settings.streamable_http_path
+        self.inner_path = STREAMABLE_HTTP_PATH
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http" or scope["path"].rstrip("/") != PROTECTED_PATH:
@@ -353,13 +357,18 @@ def build_app() -> Starlette:
     """The ASGI app: the MCP endpoint, a health check, and the server card.
 
     Paths here are absolute, because nginx forwards the original URI unchanged.
-    The MCP endpoint is at /mcp (FastMCP's own `streamable_http_path`), so the
+    The MCP endpoint is at /mcp (`STREAMABLE_HTTP_PATH`), so the
     health check sits under that same prefix — anything outside it is not
     covered by the `/mcp*` route and would be unreachable from the internet.
     The server card is the exception: its path is fixed by convention, so it
     gets a route of its own at both the nginx and Cloudflare layers.
     """
-    mcp_app = mcp.streamable_http_app()
+    # mcp 2.x takes the transport settings here rather than from `mcp.settings`.
+    mcp_app = mcp.streamable_http_app(
+        streamable_http_path=STREAMABLE_HTTP_PATH,
+        stateless_http=STATELESS_HTTP,
+        transport_security=TRANSPORT_SECURITY,
+    )
 
     return Starlette(
         routes=[

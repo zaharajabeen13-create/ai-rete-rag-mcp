@@ -20,7 +20,7 @@ from contextvars import ContextVar
 from typing import Any, Literal
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 API_URL = os.environ.get("AI_RETE_RAG_API_URL", "https://ai-rete-rag.com").rstrip("/")
 API_KEY = os.environ.get("AI_RETE_RAG_API_KEY", "")
@@ -52,7 +52,7 @@ def current_api_key() -> str:
     process's. Empty means anonymous — demo domains only."""
     return _request_api_key.get() or API_KEY
 
-mcp = FastMCP(
+mcp = MCPServer(
     "ai-rete-rag",
     instructions=(
         "ai·rete·rag combines a deterministic Rete rule engine with RAG so decisions are "
