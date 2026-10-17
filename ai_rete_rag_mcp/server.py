@@ -414,7 +414,10 @@ async def import_policy_rules(domain: str, policy_text: str) -> str:
     `policy_sentence_count`), and `unverified_citations` names rules whose
     quote is missing or not found verbatim in the policy. Show both to the
     user: an uncovered sentence may need a rule; an unverified one may be a
-    paraphrase that misstates the policy.
+    paraphrase that misstates the policy. `background_sentences` is the subset
+    of uncovered sentences with no obligation language (definitions,
+    preamble); lead with the others, but mention these too, since the split
+    is a keyword heuristic.
     NOTHING IS SAVED: review the drafts (and show them to the user), then
     persist explicitly with `put_rules` — validate first with dry_run=true,
     and keep each rule's `citation` in the YAML you save so the audit trail
