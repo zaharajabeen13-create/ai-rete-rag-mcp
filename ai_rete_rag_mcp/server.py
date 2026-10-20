@@ -64,13 +64,7 @@ mcp = MCPServer(
         "ask for those facts and decide again. When the case arrives as photos, voice "
         "notes or video, read them yourself, pass the values you found as `facts` "
         "under the `get_parameters` field names with `fact_sources` naming the file "
-        "each came from, and pass any transcript or description as `unstructured_text`. "
-        "When the case is a web page (e.g. checking a landing page against brand "
-        "guidelines), pass its address in `source_urls`: the server reads the page and "
-        "picks out the rule parameters, sourcing each to its page. To turn published "
-        "guidelines (brand, style, policy) into rules, call `import_policy_rules` with "
-        "`source_url`, review the drafts, then save with `put_rules`. "
-        "Author your own rules with `put_rules` (YAML; use dry_run to validate). "
+        "each came from, and pass any transcript or description as `unstructured_text`. Author your own rules with `put_rules` (YAML; use dry_run to validate). "
         "Built-in demo domains: loan, fraud, clinical, blockchain, insurance, "
         "legal, operations, ecommerce."
     ),
@@ -136,7 +130,6 @@ async def decide(
     extract_from_retrieval: bool = False,
     fact_sources: dict[str, str] | None = None,
     as_of: str | None = None,
-    source_urls: list[str] | None = None,
 ) -> str:
     """Make a deterministic, auditable decision in a domain.
 
@@ -167,12 +160,6 @@ async def decide(
             YYYY-MM-DD (default: today). Use the date a case was filed to
             decide it under the policy in force then; the rules themselves are
             always the current ones.
-        source_urls: Up to 3 public web pages to read the rule parameters
-            from — e.g. the landing page or product listing a brand-guidelines
-            domain should judge. The server fetches each page (its text plus
-            the colors, fonts, image alt text and meta tags it declares),
-            extracts the fields `get_parameters` lists, and records the page
-            as each fact's source. Explicit `facts` win. Needs an API key.
         unstructured_text: Optional free text (an application, a case note,
             a voice-note transcript, what a photo or video shows); facts are
             extracted from it automatically and merged.
@@ -210,8 +197,6 @@ async def decide(
         body["fact_sources"] = fact_sources
     if as_of:
         body["as_of"] = as_of
-    if source_urls:
-        body["source_urls"] = source_urls
     return await _request("POST", "/decide", json=body)
 
 
@@ -417,16 +402,8 @@ async def put_rules(domain: str, rules_yaml: str, dry_run: bool = False) -> str:
 
 
 @mcp.tool(title="Draft rules from a policy", annotations={"readOnlyHint": True})
-async def import_policy_rules(
-    domain: str, policy_text: str | None = None, source_url: str | None = None,
-) -> str:
+async def import_policy_rules(domain: str, policy_text: str) -> str:
     """Convert a written policy document into DRAFT decision rules (LLM-assisted).
-
-    Give the document as `policy_text`, or as `source_url` — the address of a
-    public page holding it, such as a brand's published guidelines. Brand and
-    style guidelines become rules on what can be observed in content (e.g.
-    primary_color, font_family, logo_present), so `decide` can later judge a
-    page passed in `source_urls` against them.
 
     Returns validated draft rules (when/action, including chained asserts where
     the policy stages its determinations), derived rule→rule edges, and overlap
@@ -449,14 +426,10 @@ async def import_policy_rules(
     Args:
         domain: Domain the rules are drafted for (an owned domain or a new name).
         policy_text: The policy document text (max ~50k characters).
-        source_url: A public http(s) page to read the policy from instead.
-            The response's `source_url` is the page actually read.
     """
-    if bool(policy_text) == bool(source_url):
-        return "Error: give exactly one of policy_text or source_url."
     return await _request(
         "POST", f"/domains/{domain}/rules/import",
-        json={"source_url": source_url} if source_url else {"policy_text": policy_text},
+        json={"policy_text": policy_text},
     )
 
 
