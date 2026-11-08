@@ -2,6 +2,8 @@
 
 <!-- mcp-name: com.ai-rete-rag/ai-rete-rag-mcp -->
 
+[![AI Rete RAG on StartupScores](https://startupscores.com/badge/ai-rete-rag.svg?style=shield&v=combo&theme=dark)](https://startupscores.com/open-source/ai-rete-rag)
+
 Use [ai·rete·rag](https://ai-rete-rag.com) — deterministic rule-based decisions with
 RAG-powered explanations — from Claude Code, Claude Desktop, or any MCP client.
 
