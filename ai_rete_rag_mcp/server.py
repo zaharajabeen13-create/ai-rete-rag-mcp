@@ -64,7 +64,13 @@ mcp = MCPServer(
         "ask for those facts and decide again. When the case arrives as photos, voice "
         "notes or video, read them yourself, pass the values you found as `facts` "
         "under the `get_parameters` field names with `fact_sources` naming the file "
-        "each came from, and pass any transcript or description as `unstructured_text`. Author your own rules with `put_rules` (YAML; use dry_run to validate). "
+        "each came from, and pass any transcript or description as `unstructured_text`. "
+        "If a `decide` result carries `next_step` (anonymous use), relay it to the user. "
+        "To turn a policy into rules: `import_policy_rules` returns drafts and saves "
+        "nothing; show the user the drafts, `uncovered_sentences` and "
+        "`unverified_citations`, then save with `put_rules` (validate with dry_run "
+        "first) and keep each rule's `citation` in the YAML. Use `get_rule_source` to "
+        "see current rules before editing them. "
         "Built-in demo domains: loan, fraud, clinical, blockchain, insurance, "
         "legal, operations, ecommerce."
     ),
@@ -139,26 +145,23 @@ async def decide(
 
     Without an API key only the shared demo domains are available, and the
     response carries `next_step`: how to get a free key for your own rules.
-    Pass that on to the user rather than dropping it.
 
     Args:
         domain: Rule-set domain, e.g. "loan", "fraud", "clinical".
         query: Natural-language question or decision request.
         facts: Structured facts for working memory, e.g.
-            {"credit_score": 710, "annual_income": 85000}. Use
-            `get_parameters` to see which fields a domain's rules test.
-            Facts you read yourself from photos, document scans, voice notes
-            or video go here, under those field names; explicit facts always
-            win over anything extracted server-side.
+            {"credit_score": 710, "annual_income": 85000}, keyed by the
+            field names the domain's rules test. Facts read from photos,
+            document scans, voice notes or video belong here too; explicit
+            facts always win over anything extracted server-side.
         fact_sources: Where each fact in `facts` came from, e.g.
             {"monthly_income": "payslip.jpg", "claim_usd": "voice note 1"}.
-            Always set this for facts you read from a file, photo, recording
-            or video: it is stored in the decision's audit record so a
-            reviewer can tell typed facts from ones read off evidence. Facts
-            without a source are recorded as "request".
+            Stored in the decision's audit record so a reviewer can tell
+            typed facts from ones read off evidence. Facts without a source
+            are recorded as "request".
         as_of: Read the domain's policy documents as of this day, as
-            YYYY-MM-DD (default: today). Use the date a case was filed to
-            decide it under the policy in force then; the rules themselves are
+            YYYY-MM-DD (default: today), so a case can be decided under the
+            policy in force on the day it was filed; the rules themselves are
             always the current ones.
         unstructured_text: Optional free text (an application, a case note,
             a voice-note transcript, what a photo or video shows); facts are
@@ -178,8 +181,8 @@ async def decide(
 
     The result's `missing_parameters` lists rule inputs that were not
     supplied but could still change the verdict, most decisive first. When it
-    is non-empty, tell the user the verdict is provisional and ask for those
-    facts; when it is empty, more facts cannot change the verdict.
+    is non-empty the verdict is provisional; when it is empty, more facts
+    cannot change the verdict.
     """
     body: dict[str, Any] = {
         "domain": domain,
@@ -211,8 +214,8 @@ async def list_rules(domain: str | None = None) -> str:
     dependencies: src asserts a fact type that dst's conditions test (forward
     chaining). Each rule may also carry `citation` — the policy sentence it
     encodes — which is what lets a decision be traced back to the source
-    clause. Also includes overlap warnings. Use this to learn which fact
-    fields a domain expects before calling `decide`.
+    clause. Also includes overlap warnings and, through the conditions, the
+    fact fields the domain's rules test.
     """
     params = {"domain": domain} if domain else None
     return await _request("GET", "/rules", params=params)
@@ -220,8 +223,8 @@ async def list_rules(domain: str | None = None) -> str:
 
 @mcp.tool(title="Get decision parameters", annotations={"readOnlyHint": True})
 async def get_parameters(domain: str) -> str:
-    """List the input parameters a domain's rules decide on — the facts to
-    collect before calling `decide`. Derived from your account's own copy of
+    """List the input parameters a domain's rules decide on — the facts a
+    decision in that domain uses. Derived from your account's own copy of
     the rules, so it covers your custom domains too.
 
     Each parameter has its `field` name (the key to use in `facts`), `kind`
@@ -315,8 +318,7 @@ async def list_documents(domain: str) -> str:
 @mcp.tool(title="Get rule source (YAML)", annotations={"readOnlyHint": True})
 async def get_rule_source(domain: str) -> str:
     """Fetch a domain's rule set as editable YAML (plus the parsed rules and
-    whether you may edit it). Use this before `put_rules` to see the current
-    rules. For a built-in demo domain you get your own copy's rules once you
+    whether you may edit it). For a built-in demo domain you get your own copy's rules once you
     have edited it, otherwise the shared demo's.
     """
     return await _request("GET", f"/domains/{domain}/rules")
@@ -386,9 +388,8 @@ async def put_rules(domain: str, rules_yaml: str, dry_run: bool = False) -> str:
           action:
             verdict: "DENIED"
 
-    IMPORTANT: when persisting drafts returned by `import_policy_rules`, copy
-    each rule's `citation` through into this YAML. Dropping it silently loses
-    the link from the decision back to the policy clause that justifies it.
+    A rule saved without its `citation` has no link from its decisions back
+    to the policy clause that justifies it.
 
     Args:
         domain: Domain to author (an owned domain, or a new name to claim).
@@ -412,16 +413,12 @@ async def import_policy_rules(domain: str, policy_text: str) -> str:
     Coverage runs the other way too: `uncovered_sentences` lists policy
     sentences no rule's citation points back to (out of
     `policy_sentence_count`), and `unverified_citations` names rules whose
-    quote is missing or not found verbatim in the policy. Show both to the
-    user: an uncovered sentence may need a rule; an unverified one may be a
-    paraphrase that misstates the policy. `background_sentences` is the subset
-    of uncovered sentences with no obligation language (definitions,
-    preamble); lead with the others, but mention these too, since the split
-    is a keyword heuristic.
-    NOTHING IS SAVED: review the drafts (and show them to the user), then
-    persist explicitly with `put_rules` — validate first with dry_run=true,
-    and keep each rule's `citation` in the YAML you save so the audit trail
-    back to the policy survives.
+    quote is missing or not found verbatim in the policy. An uncovered
+    sentence may need a rule; an unverified one may be a paraphrase that
+    misstates the policy. `background_sentences` is the subset of uncovered
+    sentences with no obligation language (definitions, preamble), split by a
+    keyword heuristic.
+    Nothing is saved: the drafts are returned for review only.
 
     Args:
         domain: Domain the rules are drafted for (an owned domain or a new name).
