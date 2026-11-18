@@ -305,7 +305,7 @@ async def protected_resource_metadata(_request: Request) -> Response:
         "authorization_servers": [OAUTH_ISSUER],
         "bearer_methods_supported": ["header"],
         "scopes_supported": ["mcp"],
-        "resource_documentation": "https://ai-rete-rag.com/mcp",
+        "resource_documentation": "https://ai-rete-rag.com/integrations/mcp",
     })
 
 
