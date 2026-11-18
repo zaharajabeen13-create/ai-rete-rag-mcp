@@ -20,6 +20,7 @@ the LLM only explains *why*, grounded in your ingested policy documents.
 | `put_rules` | Create or replace a domain's rule set from YAML (dry_run to validate) |
 | `ingest_text` | Add policy text to a domain's knowledge base, optionally dated (`effective_from`, `effective_until`) or replacing an earlier version (`supersedes`) |
 | `list_documents` | Browse a domain's ingested documents |
+| `delete_domain` | Delete your own copy of a domain (rules and documents) to free a slot in your plan's domain limit; decision audits are kept |
 | `get_usage` | Check your plan and remaining monthly decision quota |
 
 ## Prompt: `decide_case`

@@ -71,6 +71,9 @@ mcp = MCPServer(
         "`unverified_citations`, then save with `put_rules` (validate with dry_run "
         "first) and keep each rule's `citation` in the YAML. Use `get_rule_source` to "
         "see current rules before editing them. "
+        "If a save or ingest is refused with a domain limit, `delete_domain` frees a "
+        "slot, but only after the user confirms which domain to delete; copies of the "
+        "demo domains never count toward the limit. "
         "Built-in demo domains: loan, fraud, clinical, blockchain, insurance, "
         "legal, operations, ecommerce."
     ),
@@ -124,8 +127,17 @@ async def _request(method: str, path: str, **kwargs: Any) -> str:
         return r.text
 
 
+# Tool annotations, spelled out in full. Directory reviewers (OpenAI's in
+# particular) require every hint to be an explicit boolean rather than left to
+# the protocol default. openWorldHint is False throughout: every tool talks only
+# to ai·rete·rag's own API, never to arbitrary external services.
+READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False}
+WRITE = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
+DESTRUCTIVE_WRITE = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False}
+
+
 # Not read-only: each call persists an audit record and consumes plan quota.
-@mcp.tool(title="Make a decision", annotations={"readOnlyHint": False, "destructiveHint": False})
+@mcp.tool(title="Make a decision", annotations=WRITE)
 async def decide(
     domain: str,
     query: str,
@@ -203,7 +215,7 @@ async def decide(
     return await _request("POST", "/decide", json=body)
 
 
-@mcp.tool(title="List rules", annotations={"readOnlyHint": True})
+@mcp.tool(title="List rules", annotations=READ_ONLY)
 async def list_rules(domain: str | None = None) -> str:
     """List the decision rules for one domain (or all domains).
 
@@ -221,7 +233,7 @@ async def list_rules(domain: str | None = None) -> str:
     return await _request("GET", "/rules", params=params)
 
 
-@mcp.tool(title="Get decision parameters", annotations={"readOnlyHint": True})
+@mcp.tool(title="Get decision parameters", annotations=READ_ONLY)
 async def get_parameters(domain: str) -> str:
     """List the input parameters a domain's rules decide on — the facts a
     decision in that domain uses. Derived from your account's own copy of
@@ -265,7 +277,7 @@ def decide_case(domain: str, case: str) -> str:
     )
 
 
-@mcp.tool(title="Ingest policy text", annotations={"readOnlyHint": False, "destructiveHint": False})
+@mcp.tool(title="Ingest policy text", annotations=WRITE)
 async def ingest_text(
     domain: str,
     text: str,
@@ -309,22 +321,73 @@ async def ingest_text(
     return await _request("POST", "/ingest/text", json=body)
 
 
-@mcp.tool(title="List documents", annotations={"readOnlyHint": True})
+@mcp.tool(title="List documents", annotations=READ_ONLY)
 async def list_documents(domain: str) -> str:
     """List the documents ingested into a domain's knowledge base."""
     return await _request("GET", f"/domains/{domain}/documents")
 
 
-@mcp.tool(title="Get rule source (YAML)", annotations={"readOnlyHint": True})
-async def get_rule_source(domain: str) -> str:
-    """Fetch a domain's rule set as editable YAML (plus the parsed rules and
-    whether you may edit it). For a built-in demo domain you get your own copy's rules once you
-    have edited it, otherwise the shared demo's.
+@mcp.tool(title="Delete domain", annotations={**DESTRUCTIVE_WRITE, "idempotentHint": False})
+async def delete_domain(domain: str, confirm: str) -> str:
+    """Permanently delete your own copy of a domain: its rule set and every
+    ingested document. This frees its slot in your plan's domain limit.
+
+    Decision audit records are kept for the audit trail. A domain created later
+    under the same name starts empty, with a fresh history. The shared demo
+    domains are never affected: deleting `loan` removes only your own copy of it.
+
+    Args:
+        domain: The domain to delete.
+        confirm: Must repeat the domain name exactly; any other value is refused.
     """
-    return await _request("GET", f"/domains/{domain}/rules")
+    return await _request("DELETE", f"/domains/{domain}", params={"confirm": confirm})
 
 
-@mcp.tool(title="Save rules", annotations={"readOnlyHint": False, "destructiveHint": True})
+@mcp.tool(title="Get rule source (YAML)", annotations=READ_ONLY)
+async def get_rule_source(domain: str) -> str:
+    """Fetch a domain's complete rule set as editable YAML, plus whether you may
+    edit it. The whole YAML file is returned as one fenced block; show it to the
+    user in full, never just its first lines. For a built-in demo domain you get
+    your own copy's rules once you have edited it, otherwise the shared demo's.
+    """
+    return format_rule_source(await _request("GET", f"/domains/{domain}/rules"))
+
+
+def format_rule_source(raw: str) -> str:
+    """Render the API's rule-source response as the complete YAML in a fenced
+    block under a one-line header.
+
+    The API's JSON carries the YAML as one escaped string alongside the parsed
+    rules, overlaps and edges, several times its size. Clients such as
+    Microsoft 365 Copilot then summarise or cut the reply and the user sees
+    only the first lines of the file. Returning the YAML itself, once and
+    unescaped, keeps the whole file in view. Errors pass through unchanged."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return raw
+    if not isinstance(data, dict) or "rules_yaml" not in data:
+        return raw
+
+    domain = data.get("domain", "")
+    editable = "yes" if data.get("editable") else "no"
+    if not data.get("exists", True):
+        hint = " Save one with `put_rules` to create it." if data.get("editable") else ""
+        return f"No rule set has been authored for domain `{domain}` yet (editable: {editable}).{hint}"
+
+    yaml_text = str(data.get("rules_yaml", "")).rstrip("\n")
+    n_rules = len(data.get("rules") or [])
+    n_lines = yaml_text.count("\n") + 1 if yaml_text else 0
+    demo = "yes" if data.get("is_demo") else "no"
+    fence = "````" if "```" in yaml_text else "```"
+    return (
+        f"Complete rule set for domain `{domain}`: {n_rules} rules, {n_lines} lines of YAML "
+        f"(editable: {editable}, built-in demo: {demo}).\n\n"
+        f"{fence}yaml\n{yaml_text}\n{fence}"
+    )
+
+
+@mcp.tool(title="Save rules", annotations=DESTRUCTIVE_WRITE)
 async def put_rules(domain: str, rules_yaml: str, dry_run: bool = False) -> str:
     """Create or replace a domain's rule set from YAML (self-serve rule authoring).
 
@@ -402,7 +465,7 @@ async def put_rules(domain: str, rules_yaml: str, dry_run: bool = False) -> str:
     )
 
 
-@mcp.tool(title="Draft rules from a policy", annotations={"readOnlyHint": True})
+@mcp.tool(title="Draft rules from a policy", annotations=READ_ONLY)
 async def import_policy_rules(domain: str, policy_text: str) -> str:
     """Convert a written policy document into DRAFT decision rules (LLM-assisted).
 
@@ -430,7 +493,7 @@ async def import_policy_rules(domain: str, policy_text: str) -> str:
     )
 
 
-@mcp.tool(title="Check usage and quota", annotations={"readOnlyHint": True})
+@mcp.tool(title="Check usage and quota", annotations=READ_ONLY)
 async def get_usage() -> str:
     """Show this account's decision usage, plan, and remaining monthly quota."""
     if not current_api_key() and not USER_ID:
