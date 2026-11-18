@@ -71,6 +71,9 @@ mcp = MCPServer(
         "`unverified_citations`, then save with `put_rules` (validate with dry_run "
         "first) and keep each rule's `citation` in the YAML. Use `get_rule_source` to "
         "see current rules before editing them. "
+        "If a save or ingest is refused with a domain limit, `delete_domain` frees a "
+        "slot, but only after the user confirms which domain to delete; copies of the "
+        "demo domains never count toward the limit. "
         "Built-in demo domains: loan, fraud, clinical, blockchain, insurance, "
         "legal, operations, ecommerce."
     ),
@@ -313,6 +316,23 @@ async def ingest_text(
 async def list_documents(domain: str) -> str:
     """List the documents ingested into a domain's knowledge base."""
     return await _request("GET", f"/domains/{domain}/documents")
+
+
+@mcp.tool(title="Delete domain", annotations={"readOnlyHint": False, "destructiveHint": True,
+                                              "idempotentHint": False})
+async def delete_domain(domain: str, confirm: str) -> str:
+    """Permanently delete your own copy of a domain: its rule set and every
+    ingested document. This frees its slot in your plan's domain limit.
+
+    Decision audit records are kept for the audit trail. A domain created later
+    under the same name starts empty, with a fresh history. The shared demo
+    domains are never affected: deleting `loan` removes only your own copy of it.
+
+    Args:
+        domain: The domain to delete.
+        confirm: Must repeat the domain name exactly; any other value is refused.
+    """
+    return await _request("DELETE", f"/domains/{domain}", params={"confirm": confirm})
 
 
 @mcp.tool(title="Get rule source (YAML)", annotations={"readOnlyHint": True})
