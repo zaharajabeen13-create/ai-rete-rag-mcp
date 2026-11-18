@@ -317,11 +317,46 @@ async def list_documents(domain: str) -> str:
 
 @mcp.tool(title="Get rule source (YAML)", annotations={"readOnlyHint": True})
 async def get_rule_source(domain: str) -> str:
-    """Fetch a domain's rule set as editable YAML (plus the parsed rules and
-    whether you may edit it). For a built-in demo domain you get your own copy's rules once you
-    have edited it, otherwise the shared demo's.
+    """Fetch a domain's complete rule set as editable YAML, plus whether you may
+    edit it. The whole YAML file is returned as one fenced block; show it to the
+    user in full, never just its first lines. For a built-in demo domain you get
+    your own copy's rules once you have edited it, otherwise the shared demo's.
     """
-    return await _request("GET", f"/domains/{domain}/rules")
+    return format_rule_source(await _request("GET", f"/domains/{domain}/rules"))
+
+
+def format_rule_source(raw: str) -> str:
+    """Render the API's rule-source response as the complete YAML in a fenced
+    block under a one-line header.
+
+    The API's JSON carries the YAML as one escaped string alongside the parsed
+    rules, overlaps and edges, several times its size. Clients such as
+    Microsoft 365 Copilot then summarise or cut the reply and the user sees
+    only the first lines of the file. Returning the YAML itself, once and
+    unescaped, keeps the whole file in view. Errors pass through unchanged."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return raw
+    if not isinstance(data, dict) or "rules_yaml" not in data:
+        return raw
+
+    domain = data.get("domain", "")
+    editable = "yes" if data.get("editable") else "no"
+    if not data.get("exists", True):
+        hint = " Save one with `put_rules` to create it." if data.get("editable") else ""
+        return f"No rule set has been authored for domain `{domain}` yet (editable: {editable}).{hint}"
+
+    yaml_text = str(data.get("rules_yaml", "")).rstrip("\n")
+    n_rules = len(data.get("rules") or [])
+    n_lines = yaml_text.count("\n") + 1 if yaml_text else 0
+    demo = "yes" if data.get("is_demo") else "no"
+    fence = "````" if "```" in yaml_text else "```"
+    return (
+        f"Complete rule set for domain `{domain}`: {n_rules} rules, {n_lines} lines of YAML "
+        f"(editable: {editable}, built-in demo: {demo}).\n\n"
+        f"{fence}yaml\n{yaml_text}\n{fence}"
+    )
 
 
 @mcp.tool(title="Save rules", annotations={"readOnlyHint": False, "destructiveHint": True})
