@@ -127,8 +127,17 @@ async def _request(method: str, path: str, **kwargs: Any) -> str:
         return r.text
 
 
+# Tool annotations, spelled out in full. Directory reviewers (OpenAI's in
+# particular) require every hint to be an explicit boolean rather than left to
+# the protocol default. openWorldHint is False throughout: every tool talks only
+# to ai·rete·rag's own API, never to arbitrary external services.
+READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False}
+WRITE = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
+DESTRUCTIVE_WRITE = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False}
+
+
 # Not read-only: each call persists an audit record and consumes plan quota.
-@mcp.tool(title="Make a decision", annotations={"readOnlyHint": False, "destructiveHint": False})
+@mcp.tool(title="Make a decision", annotations=WRITE)
 async def decide(
     domain: str,
     query: str,
@@ -206,7 +215,7 @@ async def decide(
     return await _request("POST", "/decide", json=body)
 
 
-@mcp.tool(title="List rules", annotations={"readOnlyHint": True})
+@mcp.tool(title="List rules", annotations=READ_ONLY)
 async def list_rules(domain: str | None = None) -> str:
     """List the decision rules for one domain (or all domains).
 
@@ -224,7 +233,7 @@ async def list_rules(domain: str | None = None) -> str:
     return await _request("GET", "/rules", params=params)
 
 
-@mcp.tool(title="Get decision parameters", annotations={"readOnlyHint": True})
+@mcp.tool(title="Get decision parameters", annotations=READ_ONLY)
 async def get_parameters(domain: str) -> str:
     """List the input parameters a domain's rules decide on — the facts a
     decision in that domain uses. Derived from your account's own copy of
@@ -268,7 +277,7 @@ def decide_case(domain: str, case: str) -> str:
     )
 
 
-@mcp.tool(title="Ingest policy text", annotations={"readOnlyHint": False, "destructiveHint": False})
+@mcp.tool(title="Ingest policy text", annotations=WRITE)
 async def ingest_text(
     domain: str,
     text: str,
@@ -312,14 +321,13 @@ async def ingest_text(
     return await _request("POST", "/ingest/text", json=body)
 
 
-@mcp.tool(title="List documents", annotations={"readOnlyHint": True})
+@mcp.tool(title="List documents", annotations=READ_ONLY)
 async def list_documents(domain: str) -> str:
     """List the documents ingested into a domain's knowledge base."""
     return await _request("GET", f"/domains/{domain}/documents")
 
 
-@mcp.tool(title="Delete domain", annotations={"readOnlyHint": False, "destructiveHint": True,
-                                              "idempotentHint": False})
+@mcp.tool(title="Delete domain", annotations={**DESTRUCTIVE_WRITE, "idempotentHint": False})
 async def delete_domain(domain: str, confirm: str) -> str:
     """Permanently delete your own copy of a domain: its rule set and every
     ingested document. This frees its slot in your plan's domain limit.
@@ -335,7 +343,7 @@ async def delete_domain(domain: str, confirm: str) -> str:
     return await _request("DELETE", f"/domains/{domain}", params={"confirm": confirm})
 
 
-@mcp.tool(title="Get rule source (YAML)", annotations={"readOnlyHint": True})
+@mcp.tool(title="Get rule source (YAML)", annotations=READ_ONLY)
 async def get_rule_source(domain: str) -> str:
     """Fetch a domain's complete rule set as editable YAML, plus whether you may
     edit it. The whole YAML file is returned as one fenced block; show it to the
@@ -379,7 +387,7 @@ def format_rule_source(raw: str) -> str:
     )
 
 
-@mcp.tool(title="Save rules", annotations={"readOnlyHint": False, "destructiveHint": True})
+@mcp.tool(title="Save rules", annotations=DESTRUCTIVE_WRITE)
 async def put_rules(domain: str, rules_yaml: str, dry_run: bool = False) -> str:
     """Create or replace a domain's rule set from YAML (self-serve rule authoring).
 
@@ -457,7 +465,7 @@ async def put_rules(domain: str, rules_yaml: str, dry_run: bool = False) -> str:
     )
 
 
-@mcp.tool(title="Draft rules from a policy", annotations={"readOnlyHint": True})
+@mcp.tool(title="Draft rules from a policy", annotations=READ_ONLY)
 async def import_policy_rules(domain: str, policy_text: str) -> str:
     """Convert a written policy document into DRAFT decision rules (LLM-assisted).
 
@@ -485,7 +493,7 @@ async def import_policy_rules(domain: str, policy_text: str) -> str:
     )
 
 
-@mcp.tool(title="Check usage and quota", annotations={"readOnlyHint": True})
+@mcp.tool(title="Check usage and quota", annotations=READ_ONLY)
 async def get_usage() -> str:
     """Show this account's decision usage, plan, and remaining monthly quota."""
     if not current_api_key() and not USER_ID:

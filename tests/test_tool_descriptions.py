@@ -61,9 +61,14 @@ def test_tool_has_title_and_annotations(tool):
     assert tool.title, f"{tool.name}: missing title"
     # Wire format (camelCase), which is what the directory reviewer sees.
     ann = tool.annotations.model_dump(by_alias=True) if tool.annotations else {}
-    assert ann.get("readOnlyHint") is not None, f"{tool.name}: missing readOnlyHint"
-    if ann["readOnlyHint"] is False:
-        assert ann.get("destructiveHint") is not None, f"{tool.name}: write tool needs destructiveHint"
+    # Every hint must be an explicit boolean: the ChatGPT directory rejects
+    # tools that leave any of them to the protocol default.
+    for hint in ("readOnlyHint", "destructiveHint", "openWorldHint"):
+        assert isinstance(ann.get(hint), bool), f"{tool.name}: {hint} must be explicit"
+    if ann["readOnlyHint"]:
+        assert ann["destructiveHint"] is False, f"{tool.name}: read-only tool marked destructive"
+    # Only our own API is ever called.
+    assert ann["openWorldHint"] is False, f"{tool.name}: unexpected openWorldHint"
 
 
 def test_workflow_guidance_lives_in_server_instructions():
