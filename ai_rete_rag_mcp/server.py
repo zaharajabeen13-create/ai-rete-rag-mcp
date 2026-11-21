@@ -21,6 +21,7 @@ from typing import Any, Literal
 
 import httpx
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 API_URL = os.environ.get("AI_RETE_RAG_API_URL", "https://ai-rete-rag.com").rstrip("/")
 API_KEY = os.environ.get("AI_RETE_RAG_API_KEY", "")
@@ -106,20 +107,26 @@ def _headers() -> dict[str, str]:
 
 
 async def _request(method: str, path: str, **kwargs: Any) -> str:
-    """Call the ai·rete·rag API and return pretty-printed JSON, or a readable error."""
+    """Call the ai·rete·rag API and return pretty-printed JSON.
+
+    A failed call raises `ToolError` with a readable message. The SDK prefixes
+    it with "Error executing tool <name>:" and flags the result `isError: true`,
+    so clients such as Microsoft 365 Copilot can tell a refusal (sign-in
+    required, domain limit) from data. A returned string would arrive flagged
+    as success."""
     url = f"{API_URL}/api/v1{path}"
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             r = await client.request(method, url, headers=_headers(), **kwargs)
     except httpx.RequestError as exc:
-        return f"Error: could not reach ai·rete·rag API at {API_URL} ({exc})"
+        raise ToolError(f"could not reach the ai·rete·rag API at {API_URL} ({exc})") from exc
 
     if r.status_code >= 400:
         try:
             detail = r.json().get("detail", r.text)
         except ValueError:
             detail = r.text
-        return f"Error {r.status_code}: {detail}"
+        raise ToolError(f"ai·rete·rag API returned {r.status_code}: {detail}")
 
     try:
         return json.dumps(r.json(), indent=2)
@@ -343,7 +350,12 @@ async def delete_domain(domain: str, confirm: str) -> str:
     return await _request("DELETE", f"/domains/{domain}", params={"confirm": confirm})
 
 
-@mcp.tool(title="Get rule source (YAML)", annotations=READ_ONLY)
+# structured_output=False: the reply is text meant to be shown as-is. With
+# structured output on, the SDK would also send the whole reply a second time
+# as one JSON-escaped string in `structuredContent`, which MCP clients are told
+# to prefer. Copilot then had an escaped one-line copy of the YAML to work from
+# as well, and sometimes cut the YAML short (ticket #5971696, item 6).
+@mcp.tool(title="Get rule source (YAML)", annotations=READ_ONLY, structured_output=False)
 async def get_rule_source(domain: str) -> str:
     """Fetch a domain's complete rule set as editable YAML, plus whether you may
     edit it. The whole YAML file is returned as one fenced block; show it to the
@@ -380,10 +392,14 @@ def format_rule_source(raw: str) -> str:
     n_lines = yaml_text.count("\n") + 1 if yaml_text else 0
     demo = "yes" if data.get("is_demo") else "no"
     fence = "````" if "```" in yaml_text else "```"
+    # The closing line names where the file ends. A bare closing fence as the
+    # last line gave the model nothing to check its copy against, and Copilot
+    # sometimes stopped a few lines in while saying it had shown everything.
     return (
         f"Complete rule set for domain `{domain}`: {n_rules} rules, {n_lines} lines of YAML "
-        f"(editable: {editable}, built-in demo: {demo}).\n\n"
-        f"{fence}yaml\n{yaml_text}\n{fence}"
+        f"(editable: {editable}, built-in demo: {demo}). Show all {n_lines} lines.\n\n"
+        f"{fence}yaml\n{yaml_text}\n{fence}\n\n"
+        f"End of the `{domain}` rule set: {n_rules} rules, {n_lines} lines."
     )
 
 
@@ -497,9 +513,9 @@ async def import_policy_rules(domain: str, policy_text: str) -> str:
 async def get_usage() -> str:
     """Show this account's decision usage, plan, and remaining monthly quota."""
     if not current_api_key() and not USER_ID:
-        return ("Error: no API key. Set AI_RETE_RAG_API_KEY when running locally, "
-                "or send it as an Authorization: Bearer header when connecting "
-                "to a remote endpoint.")
+        raise ToolError("no API key. Set AI_RETE_RAG_API_KEY when running locally, "
+                        "or send it as an Authorization: Bearer header when connecting "
+                        "to a remote endpoint.")
     return await _request("GET", "/usage")
 
 

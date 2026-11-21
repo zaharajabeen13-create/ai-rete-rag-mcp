@@ -32,8 +32,16 @@ def test_returns_the_complete_yaml_unescaped():
     assert LONG_YAML.rstrip("\n") in out
     assert out.startswith("Complete rule set for domain `loan`: 60 rules, 300 lines")
     assert "```yaml\n- name: \"Rule 0\"" in out
-    assert out.rstrip().endswith("```")
+    assert "\n```\n\n" in out  # the fence closes after the last line of YAML
     assert "Rule 59" in out
+
+
+def test_ends_with_a_line_naming_where_the_file_ends():
+    # A bare closing fence as the last line gave Copilot no end marker to check
+    # its copy against; it sometimes stopped a few lines in.
+    out = srv.format_rule_source(_payload())
+    assert out.endswith("End of the `loan` rule set: 60 rules, 300 lines.")
+    assert "Show all 300 lines." in out.splitlines()[0]
 
 
 def test_drops_the_redundant_parsed_views():
