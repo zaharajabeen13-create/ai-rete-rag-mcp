@@ -354,7 +354,10 @@ class TestAnonymousAccess:
     async def test_get_usage_without_a_key_explains_both_transports(self, monkeypatch):
         monkeypatch.setattr(srv, "API_KEY", "")
         monkeypatch.setattr(srv, "USER_ID", "")
-        out = await srv.get_usage()
+        # Raised, not returned, so the client sees isError: true.
+        with pytest.raises(srv.ToolError) as exc:
+            await srv.get_usage()
+        out = str(exc.value)
         assert "Authorization" in out and "AI_RETE_RAG_API_KEY" in out
 
 
@@ -564,3 +567,60 @@ class TestDocumentValidity:
         assert sent[0]["as_of"] == "2026-06-30"
         await _call_tool(client, "decide", {"domain": "loan", "query": "q"})
         assert "as_of" not in sent[1]
+
+
+def _fake_api(monkeypatch, handler) -> None:
+    """Route the server's own API calls to `handler`, leaving the test client
+    (also an httpx.AsyncClient) untouched."""
+    real = httpx.AsyncClient
+
+    class _Client(real):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(srv.httpx, "AsyncClient", _Client)
+
+
+class TestToolResultShape:
+    """What Microsoft 365 Copilot receives (Teams validation ticket #5971696)."""
+
+    @pytest.mark.anyio
+    async def test_rule_source_is_sent_once_as_plain_text(self, client, monkeypatch):
+        # With structured output on, the SDK also sent the reply as one escaped
+        # string in structuredContent, which clients are told to prefer.
+        async def fake_request(method: str, path: str, **kwargs):
+            return json.dumps({"domain": "loan", "rules_yaml": "- name: a\n",
+                               "rules": [{}], "editable": False, "exists": True})
+        monkeypatch.setattr(srv, "_request", fake_request)
+        body = await _call_tool(client, "get_rule_source", {"domain": "loan"})
+        result = body["result"]
+        assert "structuredContent" not in result
+        assert result["content"][0]["text"].startswith("Complete rule set for domain `loan`")
+        assert result.get("isError") is False
+
+    @pytest.mark.anyio
+    async def test_rule_source_has_no_output_schema(self, client):
+        r = await client.post("/mcp", headers=MCP_HEADERS, json={
+            "jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}})
+        tools = {t["name"]: t for t in _parse(r)["result"]["tools"]}
+        assert "outputSchema" not in tools["get_rule_source"]
+
+    @pytest.mark.anyio
+    async def test_an_api_error_is_flagged_as_an_error(self, client, monkeypatch):
+        # A refusal used to arrive as ordinary text with isError false, so a
+        # client could not tell "sign in required" from data.
+        _fake_api(monkeypatch, lambda req: httpx.Response(401, json={"detail": "Sign in required"}))
+        body = await _call_tool(client, "list_documents", {"domain": "loan"})
+        result = body["result"]
+        assert result["isError"] is True
+        assert result["content"][0]["text"] == (
+            "Error executing tool list_documents: ai·rete·rag API returned 401: Sign in required")
+
+    @pytest.mark.anyio
+    async def test_an_unreachable_api_is_flagged_as_an_error(self, client, monkeypatch):
+        def unreachable(req):
+            raise httpx.ConnectError("no route", request=req)
+        _fake_api(monkeypatch, unreachable)
+        body = await _call_tool(client, "list_documents", {"domain": "loan"})
+        assert body["result"]["isError"] is True
+        assert "could not reach" in body["result"]["content"][0]["text"]
