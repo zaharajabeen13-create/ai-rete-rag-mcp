@@ -50,6 +50,11 @@ Add `https://ai-rete-rag.com/mcp/auth` as a custom connector and approve the
 prompt. Connections are listed under **Settings → Connected apps**, and
 disconnecting one takes effect immediately.
 
+The hosted endpoint logs which MCP client made each connection and tool call:
+the client's name, its version and the tool name. It never logs keys, tokens,
+IP addresses or tool arguments. See
+[docs/client-attribution.md](docs/client-attribution.md).
+
 ## Install
 
 No install needed with [uv](https://docs.astral.sh/uv/) — `uvx ai-rete-rag-mcp`

@@ -71,6 +71,12 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from . import __version__
 from . import server as _server
+from .client_attribution import (
+    AttributionSink,
+    ClientAttributionMiddleware,
+    LoggingSink,
+    configure_default_logger,
+)
 from .server import API_URL, _request_api_key, _request_client_ip, mcp
 
 # Every tool call this process makes is a hosted-endpoint call. The API only
@@ -144,6 +150,12 @@ _CORS_ORIGIN_REGEX = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
 # That is the apex: `api.` is unproxied and serves a Cloudflare Origin CA cert,
 # which fails validation for every client that is not Cloudflare.
 PUBLIC_URL = os.environ.get("MCP_PUBLIC_URL", "https://ai-rete-rag.com/mcp")
+
+# Which MCP client made each request, logged so traffic from each directory
+# listing can be counted. See docs/client-attribution.md. On unless turned off.
+CLIENT_ATTRIBUTION = os.environ.get("MCP_CLIENT_ATTRIBUTION", "on").strip().lower() not in {
+    "off", "0", "false", "no",
+}
 
 # ── The OAuth-protected endpoint ───────────────────────────────────────────────
 
@@ -353,8 +365,12 @@ async def server_card(_request: Request) -> Response:
     return JSONResponse(SERVER_CARD)
 
 
-def build_app() -> Starlette:
+def build_app(attribution_sink: AttributionSink | None = None) -> Starlette:
     """The ASGI app: the MCP endpoint, a health check, and the server card.
+
+    `attribution_sink` receives one event per attributed MCP request. When it
+    is omitted, events go to the `ai_rete_rag_mcp.clients` logger, unless
+    MCP_CLIENT_ATTRIBUTION is off.
 
     Paths here are absolute, because nginx forwards the original URI unchanged.
     The MCP endpoint is at /mcp (`STREAMABLE_HTTP_PATH`), so the
@@ -369,6 +385,16 @@ def build_app() -> Starlette:
         stateless_http=STATELESS_HTTP,
         transport_security=TRANSPORT_SECURITY,
     )
+
+    attribution: list[Middleware] = []
+    if attribution_sink is not None or CLIENT_ATTRIBUTION:
+        if attribution_sink is None:
+            attribution_sink = LoggingSink(configure_default_logger())
+        attribution = [Middleware(
+            ClientAttributionMiddleware,
+            sink=attribution_sink,
+            paths=(STREAMABLE_HTTP_PATH, PROTECTED_PATH),
+        )]
 
     return Starlette(
         routes=[
@@ -403,6 +429,9 @@ def build_app() -> Starlette:
                 expose_headers=["mcp-session-id", "mcp-protocol-version"],
             ),
             Middleware(CallerContextMiddleware),
+            # Outside the OAuth gate, so it sees /mcp/auth before the gate
+            # rewrites the path, and records the 401s the gate answers with.
+            *attribution,
             # Innermost, so the caller context above is already bound when a
             # gated request is handed to the MCP app.
             Middleware(ProtectedEndpointMiddleware, inner=mcp_app),
